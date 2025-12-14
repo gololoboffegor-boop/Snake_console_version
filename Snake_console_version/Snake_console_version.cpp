@@ -9,6 +9,11 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <functional> 
+#include <cmath>      
+#include <algorithm>  
+#include <random>
+#include <ctime>
 
 struct Button {
     sf::RectangleShape rect;
@@ -40,6 +45,7 @@ struct Fruit {
     float maxLifetime = 10.0f; // Максимальное время жизни
     float spoilRate = 1.0f; // Скорость порчи (зависит от сложности)
     sf::CircleShape shape;
+    bool isGood; 
 
     Fruit(sf::Vector2f pos, float life, float spoil = 1.0f) {
         position = pos;
@@ -48,12 +54,17 @@ struct Fruit {
         spoilRate = spoil;
         shape.setRadius(15.0f);
         shape.setPosition(pos);
+        isGood = true; // ИНИЦИАЛИЗИРОВАТЬ
         updateAppearance();
     }
 
     void update(float deltaTime) {
         lifetime -= deltaTime * spoilRate;
         if (lifetime < 0) lifetime = 0;
+
+        
+        isGood = (lifetime > 0.2f * maxLifetime);
+
         updateAppearance();
     }
 
@@ -79,12 +90,14 @@ struct Fruit {
         shape.setScale(scale, scale);
     }
 
-    bool isSpoiled() const {
-        return lifetime <= 0;
+    
+    bool isGoodFruit() const {
+        return lifetime > 0.2f * maxLifetime;
     }
 
-    bool isGood() const {
-        return lifetime > 0.2f * maxLifetime; // Считаем хорошим, если свежесть > 20%
+    
+    bool getIsGood() const {
+        return isGood;
     }
 };
 
@@ -99,8 +112,449 @@ struct Settings {
     int difficulty = 1; // 1 - легкая, 2 - средняя, 3 - сложная
 };
 
+
+
+enum GameState {
+    MENU,
+    PLAYING,
+    PAUSED,
+    GAME_OVER
+};
+
+struct GameData {
+    // Игрок
+    std::string playerName;
+    sf::Color playerColor;
+    int score;
+    int roundWins;
+
+    // Игра
+    int currentRound;
+    int totalRounds;
+    int totalBots;
+    float gameTime;
+    bool isMultiplayer;
+
+    // Настройки управления
+    sf::Keyboard::Key turnLeft;
+    sf::Keyboard::Key turnRight;
+    sf::Keyboard::Key accelerate;
+    sf::Keyboard::Key decelerate;
+
+    // Состояние
+    bool isAlive;
+    bool gameStarted;
+
+    GameData() {
+        playerName = "Player";
+        playerColor = sf::Color::Blue;
+        score = 0;
+        roundWins = 0;
+        currentRound = 1;
+        totalRounds = 1;
+        totalBots = 0;
+        gameTime = 0.0f;
+        isMultiplayer = false;
+        turnLeft = sf::Keyboard::A;
+        turnRight = sf::Keyboard::D;
+        accelerate = sf::Keyboard::W;
+        decelerate = sf::Keyboard::S;
+        isAlive = true;
+        gameStarted = false;
+    }
+};
+
+// Класс змейки
+class Snake {
+public:
+    std::vector<sf::Vector2f> body;
+    sf::Color color;
+    float speed;
+    float rotation;
+    float rotationSpeed;
+    int score;
+    std::string name;
+    bool isPlayer;
+    bool isAlive;
+
+    // Управление
+    sf::Keyboard::Key turnLeft;
+    sf::Keyboard::Key turnRight;
+    sf::Keyboard::Key accelerate;
+    sf::Keyboard::Key decelerate;
+
+    Snake(const std::string& n, const sf::Color& c, bool player = true) {
+        name = n;
+        color = c;
+        speed = 150.0f;
+        rotation = 0.0f;
+        rotationSpeed = 180.0f;
+        score = 0;
+        isPlayer = player;
+        isAlive = true;
+
+        // Начальная позиция
+        body.push_back(sf::Vector2f(400, 300));
+        for (int i = 1; i < 5; i++) {
+            body.push_back(sf::Vector2f(380 - i * 20, 300));
+        }
+
+        // Управление по умолчанию
+        turnLeft = sf::Keyboard::A;
+        turnRight = sf::Keyboard::D;
+        accelerate = sf::Keyboard::W;
+        decelerate = sf::Keyboard::S;
+    }
+
+    void update(float deltaTime) {
+        if (!isAlive) return;
+
+        // Обновление позиции
+        float radians = rotation * 3.14159f / 180.0f;
+        sf::Vector2f velocity(cos(radians) * speed * deltaTime,
+            sin(radians) * speed * deltaTime);
+
+        // Двигаем голову
+        body[0] += velocity;
+
+        // Двигаем тело
+        for (size_t i = 1; i < body.size(); i++) {
+            sf::Vector2f dir = body[i - 1] - body[i];
+            float dist = sqrt(dir.x * dir.x + dir.y * dir.y);
+            if (dist > 20.0f) {
+                dir = dir / dist;
+                body[i] = body[i - 1] - dir * 20.0f;
+            }
+        }
+    }
+
+    void draw(sf::RenderWindow& window) {
+        for (size_t i = 0; i < body.size(); i++) {
+            sf::CircleShape segment(15.0f);
+            if (i == 0) segment.setRadius(18.0f); // Голова больше
+            segment.setFillColor(color);
+            segment.setPosition(body[i]);
+            if (i == 0) {
+                segment.setOrigin(3, 3); // Центрируем голову
+            }
+            window.draw(segment);
+        }
+    }
+
+    void grow() {
+        if (body.size() > 1) {
+            sf::Vector2f last = body.back();
+            sf::Vector2f secondLast = body[body.size() - 2];
+            sf::Vector2f dir = last - secondLast;
+            dir = dir / sqrt(dir.x * dir.x + dir.y * dir.y);
+            body.push_back(last + dir * 20.0f);
+        }
+        else {
+            body.push_back(body[0]);
+        }
+        score += 10;
+    }
+
+    sf::Vector2f getHeadPosition() const {
+        return body[0];
+    }
+};
+
+
+
+
+class PauseDialog {
+private:
+    sf::RenderWindow* window;
+    sf::Font* font;
+    bool visible;
+
+    struct DialogButton {
+        sf::RectangleShape rect;
+        sf::Text text;
+        std::string action;
+    };
+
+    std::vector<DialogButton> buttons;
+
+public:
+    PauseDialog(sf::RenderWindow* win, sf::Font* fnt) : window(win), font(fnt), visible(false) {
+        createButtons();
+    }
+
+    void createButtons() {
+        buttons.clear();
+
+        // Кнопка "Resume"
+        DialogButton btn1;
+        btn1.rect.setSize(sf::Vector2f(200, 50));
+        btn1.rect.setPosition(400, 300);
+        btn1.rect.setFillColor(sf::Color(50, 150, 50, 220));
+        btn1.rect.setOutlineThickness(2);
+        btn1.rect.setOutlineColor(sf::Color::White);
+        btn1.text.setFont(*font);
+        btn1.text.setString("Resume Game");
+        btn1.text.setCharacterSize(24);
+        btn1.text.setFillColor(sf::Color::White);
+        btn1.text.setPosition(450, 325);
+        btn1.action = "resume";
+        buttons.push_back(btn1);
+
+        // Кнопка "Restart"
+        DialogButton btn2;
+        btn2.rect.setSize(sf::Vector2f(200, 50));
+        btn2.rect.setPosition(400, 370);
+        btn2.rect.setFillColor(sf::Color(50, 100, 150, 220));
+        btn2.rect.setOutlineThickness(2);
+        btn2.rect.setOutlineColor(sf::Color::White);
+        btn2.text.setFont(*font);
+        btn2.text.setString("Restart Game");
+        btn2.text.setCharacterSize(24);
+        btn2.text.setFillColor(sf::Color::White);
+        btn2.text.setPosition(450, 395);
+        btn2.action = "restart";
+        buttons.push_back(btn2);
+
+        // Кнопка "Exit to Menu"
+        DialogButton btn3;
+        btn3.rect.setSize(sf::Vector2f(200, 50));
+        btn3.rect.setPosition(400, 440);
+        btn3.rect.setFillColor(sf::Color(150, 50, 50, 220));
+        btn3.rect.setOutlineThickness(2);
+        btn3.rect.setOutlineColor(sf::Color::White);
+        btn3.text.setFont(*font);
+        btn3.text.setString("Exit to Menu");
+        btn3.text.setCharacterSize(24);
+        btn3.text.setFillColor(sf::Color::White);
+        btn3.text.setPosition(450, 465);
+        btn3.action = "exit";
+        buttons.push_back(btn3);
+    }
+
+    void show() { visible = true; }
+    void hide() { visible = false; }
+    bool isVisible() const { return visible; }
+
+    void handleClick(sf::Vector2f mousePos, std::function<void(std::string)> callback) {
+        if (!visible) return;
+
+        for (auto& btn : buttons) {
+            if (btn.rect.getGlobalBounds().contains(mousePos)) {
+                callback(btn.action);
+                break;
+            }
+        }
+    }
+
+    void render() {
+        if (!visible) return;
+
+        // Полупрозрачный фон
+        sf::RectangleShape overlay;
+        overlay.setSize(sf::Vector2f(1000, 900));
+        overlay.setFillColor(sf::Color(0, 0, 0, 150));
+        window->draw(overlay);
+
+        // Диалоговое окно
+        sf::RectangleShape dialog;
+        dialog.setSize(sf::Vector2f(400, 300));
+        dialog.setPosition(300, 250);
+        dialog.setFillColor(sf::Color(30, 30, 50, 230));
+        dialog.setOutlineThickness(3);
+        dialog.setOutlineColor(sf::Color::White);
+        window->draw(dialog);
+
+        // Заголовок
+        sf::Text title;
+        title.setFont(*font);
+        title.setString("GAME PAUSED");
+        title.setCharacterSize(36);
+        title.setFillColor(sf::Color::Yellow);
+        title.setPosition(350, 260);
+        window->draw(title);
+
+        // Кнопки
+        for (auto& btn : buttons) {
+            window->draw(btn.rect);
+            window->draw(btn.text);
+        }
+    }
+};
+
+class GameOverDialog {
+private:
+    sf::RenderWindow* window;
+    sf::Font* font;
+    bool visible;
+
+    struct DialogButton {
+        sf::RectangleShape rect;
+        sf::Text text;
+        std::string action;
+    };
+
+    std::vector<DialogButton> buttons;
+    std::string winnerName;
+    sf::Color winnerColor;
+    int playerScore;
+    int roundWins;
+    int totalRounds;
+
+public:
+    GameOverDialog(sf::RenderWindow* win, sf::Font* fnt) :
+        window(win), font(fnt), visible(false), playerScore(0),
+        roundWins(0), totalRounds(1) {
+        createButtons();
+    }
+
+    void createButtons() {
+        buttons.clear();
+
+        // Кнопка "Restart"
+        DialogButton btn1;
+        btn1.rect.setSize(sf::Vector2f(200, 50));
+        btn1.rect.setPosition(350, 500);
+        btn1.rect.setFillColor(sf::Color(50, 150, 50, 220));
+        btn1.rect.setOutlineThickness(2);
+        btn1.rect.setOutlineColor(sf::Color::White);
+        btn1.text.setFont(*font);
+        btn1.text.setString("Restart");
+        btn1.text.setCharacterSize(24);
+        btn1.text.setFillColor(sf::Color::White);
+        btn1.text.setPosition(425, 525);
+        btn1.action = "restart";
+        buttons.push_back(btn1);
+
+        // Кнопка "Exit"
+        DialogButton btn2;
+        btn2.rect.setSize(sf::Vector2f(200, 50));
+        btn2.rect.setPosition(550, 500);
+        btn2.rect.setFillColor(sf::Color(150, 50, 50, 220));
+        btn2.rect.setOutlineThickness(2);
+        btn2.rect.setOutlineColor(sf::Color::White);
+        btn2.text.setFont(*font);
+        btn2.text.setString("Exit");
+        btn2.text.setCharacterSize(24);
+        btn2.text.setFillColor(sf::Color::White);
+        btn2.text.setPosition(625, 525);
+        btn2.action = "exit";
+        buttons.push_back(btn2);
+    }
+
+    void show(const std::string& winner, const sf::Color& color,
+        int score, int wins, int rounds) {
+        winnerName = winner;
+        winnerColor = color;
+        playerScore = score;
+        roundWins = wins;
+        totalRounds = rounds;
+        visible = true;
+    }
+
+    void hide() { visible = false; }
+    bool isVisible() const { return visible; }
+
+    void handleClick(sf::Vector2f mousePos, std::function<void(std::string)> callback) {
+        if (!visible) return;
+
+        for (auto& btn : buttons) {
+            if (btn.rect.getGlobalBounds().contains(mousePos)) {
+                callback(btn.action);
+                break;
+            }
+        }
+    }
+
+    void render() {
+        if (!visible) return;
+
+        // Полупрозрачный фон
+        sf::RectangleShape overlay;
+        overlay.setSize(sf::Vector2f(1000, 900));
+        overlay.setFillColor(sf::Color(0, 0, 0, 180));
+        window->draw(overlay);
+
+        // Диалоговое окно
+        sf::RectangleShape dialog;
+        dialog.setSize(sf::Vector2f(600, 400));
+        dialog.setPosition(200, 250);
+        dialog.setFillColor(sf::Color(20, 20, 40, 230));
+        dialog.setOutlineThickness(3);
+        dialog.setOutlineColor(sf::Color::Yellow);
+        window->draw(dialog);
+
+        // Заголовок
+        sf::Text title;
+        title.setFont(*font);
+        title.setString("GAME OVER");
+        title.setCharacterSize(48);
+        title.setFillColor(sf::Color::Red);
+        title.setPosition(350, 260);
+        window->draw(title);
+
+        // Победитель
+        sf::Text winnerText;
+        winnerText.setFont(*font);
+        winnerText.setString("Winner: " + winnerName);
+        winnerText.setCharacterSize(32);
+        winnerText.setFillColor(winnerColor);
+        winnerText.setPosition(250, 330);
+        window->draw(winnerText);
+
+        // Счет
+        sf::Text scoreText;
+        scoreText.setFont(*font);
+        if (totalRounds > 1) {
+            scoreText.setString("Game Score: " + std::to_string(roundWins) +
+                " wins (Total: " + std::to_string(playerScore) + " points)");
+        }
+        else {
+            scoreText.setString("Score: " + std::to_string(playerScore) + " points");
+        }
+        scoreText.setCharacterSize(28);
+        scoreText.setFillColor(sf::Color::White);
+        scoreText.setPosition(250, 380);
+        window->draw(scoreText);
+
+        // Кнопки
+        for (auto& btn : buttons) {
+            window->draw(btn.rect);
+            window->draw(btn.text);
+        }
+    }
+};
+
+
 class GameMenu {
 private:
+    // Игровые объекты
+    std::vector<Snake*> snakes;
+    std::vector<Fruit*> gameFruits;
+
+    // Игровое состояние
+    GameState gameState;
+    GameData gameData;
+
+    // UI для игры
+    sf::Text scoreText;
+    sf::Text roundText;
+    sf::Text playerInfoText;
+    sf::Text timerText;
+
+    // Диалоги
+    PauseDialog* pauseDialog;
+    GameOverDialog* gameOverDialog;
+
+    // Таймеры
+    sf::Clock gameClock;
+    sf::Clock fruitSpawnClock;
+    sf::Clock inputClock;
+
+    // Фрукты
+    float fruitSpawnInterval;
+
+    
+
     sf::RenderWindow* window;
     sf::Font font;
     float demoTime = 0.0f; // для демонстрации фруктов
@@ -480,7 +934,13 @@ private:
     }
 
 public:
-    GameMenu() : window(nullptr) {}
+    GameMenu() : window(nullptr) {
+        
+        gameState = MENU;
+        pauseDialog = nullptr;
+        gameOverDialog = nullptr;
+        fruitSpawnInterval = 3.0f;
+    }
 
     ~GameMenu() {
         for (auto btn : mainButtons) delete btn;
@@ -489,10 +949,460 @@ public:
         for (auto btn : aboutButtons) delete btn;
         for (auto btn : exitConfirmButtons) delete btn;
         for (auto btn : editKeysButtons) delete btn;
-        
+
         for (auto btn : difficultyButtons) delete btn;
         for (auto fruit : exampleFruits) delete fruit;
+
+        
+        delete pauseDialog;
+        delete gameOverDialog;
+        for (auto snake : snakes) delete snake;
+        for (auto fruit : gameFruits) delete fruit;
     }
+    
+
+    void startGame(int rounds, int bots) {
+        gameState = PLAYING;
+        gameData.totalRounds = rounds;
+        gameData.totalBots = bots;
+        gameData.currentRound = 1;
+        gameData.score = 0;
+        gameData.roundWins = 0;
+        gameData.gameTime = 0.0f;
+        gameData.isAlive = true;
+
+        // Очистка старых объектов
+        for (auto snake : snakes) delete snake;
+        for (auto fruit : gameFruits) delete fruit;
+        snakes.clear();
+        gameFruits.clear();
+
+        // Создание игрока
+        Snake* player = new Snake(settings.playerName, settings.playerColor);
+        player->turnLeft = settings.playerKeys[1];  // A
+        player->turnRight = settings.playerKeys[3]; // D
+        player->accelerate = settings.playerKeys[0]; // W
+        player->decelerate = settings.playerKeys[2]; // S
+
+        // Настройка скорости в зависимости от сложности
+        switch (settings.difficulty) {
+        case 1: player->speed = 120.0f; break;
+        case 2: player->speed = 180.0f; break;
+        case 3: player->speed = 240.0f; break;
+        }
+
+        snakes.push_back(player);
+        gameData.playerName = settings.playerName;
+        gameData.playerColor = settings.playerColor;
+
+        // Создание ботов
+        for (int i = 0; i < bots; i++) {
+            Snake* bot = new Snake("Bot " + std::to_string(i + 1), settings.botColor, false);
+            bot->body[0] = sf::Vector2f(200 + i * 150, 200 + i * 100);
+            for (size_t j = 1; j < bot->body.size(); j++) {
+                bot->body[j] = sf::Vector2f(180 + i * 150 - (j - 1) * 20, 200 + i * 100);
+            }
+            snakes.push_back(bot);
+        }
+
+        // Создание начальных фруктов
+        for (int i = 0; i < 5; i++) {
+            spawnGameFruit();
+        }
+
+        gameClock.restart();
+        fruitSpawnClock.restart();
+    }
+
+    void spawnGameFruit() {
+        float x = 100 + rand() % 800;
+        float y = 100 + rand() % 600;
+
+        float spoilRate = 1.0f;
+        switch (settings.difficulty) {
+        case 1: spoilRate = 0.5f; break;
+        case 2: spoilRate = 1.0f; break;
+        case 3: spoilRate = 2.0f; break;
+        }
+
+        
+        gameFruits.push_back(new Fruit(sf::Vector2f(x, y), 10.0f, spoilRate));
+    }
+
+    void updateGame(float deltaTime) {
+        if (gameState != PLAYING) return;
+
+        gameData.gameTime += deltaTime;
+
+        // Обновление змей
+        for (auto snake : snakes) {
+            if (snake->isAlive) {
+                snake->update(deltaTime);
+            }
+        }
+
+        // Обновление фруктов
+        for (auto fruit : gameFruits) {
+            fruit->update(deltaTime);
+        }
+
+        // Спавн новых фруктов
+        if (fruitSpawnClock.getElapsedTime().asSeconds() > fruitSpawnInterval) {
+            spawnGameFruit();
+            fruitSpawnClock.restart();
+        }
+
+        // Проверка столкновений
+        checkCollisions();
+        checkGameOver();
+    }
+
+    void checkCollisions() {
+        // Проверка столкновения с фруктами
+        for (size_t i = 0; i < gameFruits.size(); i++) {
+            if (!gameFruits[i]->isGood) continue; // Использовать поле
+
+            for (auto snake : snakes) {
+                if (!snake->isAlive) continue;
+
+                float dx = snake->getHeadPosition().x - gameFruits[i]->position.x;
+                float dy = snake->getHeadPosition().y - gameFruits[i]->position.y;
+                float distance = sqrt(dx * dx + dy * dy);
+
+                if (distance < 30.0f) {
+                    snake->grow();
+                    gameFruits[i]->isGood = false; // Использовать поле
+                    gameData.score = snake->score;
+
+                    // Увеличение скорости при съедении фрукта
+                    snake->speed = std::min(snake->speed + 10.0f, 300.0f);
+                    break;
+                }
+            }
+        }
+
+        // Удаление испорченных фруктов
+        gameFruits.erase(std::remove_if(gameFruits.begin(), gameFruits.end(),
+            [](Fruit* f) { return !f->isGood; }), gameFruits.end()); // Использовать поле
+
+        // Проверка столкновений со стенами
+        for (auto snake : snakes) {
+            if (!snake->isAlive) continue;
+
+            sf::Vector2f head = snake->getHeadPosition();
+            if (head.x < 50 || head.x > 950 || head.y < 50 || head.y > 850) {
+                snake->isAlive = false;
+            }
+        }
+
+        // Проверка столкновений с телами
+        for (auto snake : snakes) {
+            if (!snake->isAlive) continue;
+
+            for (size_t i = 1; i < snake->body.size(); i++) {
+                float dx = snake->getHeadPosition().x - snake->body[i].x;
+                float dy = snake->getHeadPosition().y - snake->body[i].y;
+                float distance = sqrt(dx * dx + dy * dy);
+
+                if (distance < 25.0f) {
+                    snake->isAlive = false;
+                    break;
+                }
+            }
+        }
+
+        // Проверка столкновений между змеями
+        for (size_t i = 0; i < snakes.size(); i++) {
+            if (!snakes[i]->isAlive) continue;
+
+            for (size_t j = 0; j < snakes.size(); j++) {
+                if (i == j || !snakes[j]->isAlive) continue;
+
+                // Проверка лобового столкновения
+                float dx = snakes[i]->getHeadPosition().x - snakes[j]->getHeadPosition().x;
+                float dy = snakes[i]->getHeadPosition().y - snakes[j]->getHeadPosition().y;
+                float distance = sqrt(dx * dx + dy * dy);
+
+                if (distance < 30.0f) {
+                    // Если игрок столкнулся с ботом "лоб в лоб" - проигрыш игрока
+                    if (snakes[i]->isPlayer && !snakes[j]->isPlayer) {
+                        snakes[i]->isAlive = false;
+                    }
+                    else if (!snakes[i]->isPlayer && snakes[j]->isPlayer) {
+                        snakes[j]->isAlive = false;
+                    }
+                    else {
+                        // Если два бота столкнулись
+                        snakes[i]->isAlive = false;
+                        snakes[j]->isAlive = false;
+                    }
+                }
+
+                // Проверка столкновения с телом другой змеи
+                for (size_t k = 1; k < snakes[j]->body.size(); k++) {
+                    float dx2 = snakes[i]->getHeadPosition().x - snakes[j]->body[k].x;
+                    float dy2 = snakes[i]->getHeadPosition().y - snakes[j]->body[k].y;
+                    float distance2 = sqrt(dx2 * dx2 + dy2 * dy2);
+
+                    if (distance2 < 25.0f) {
+                        snakes[i]->isAlive = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    void checkGameOver() {
+        if (gameState != PLAYING) return;
+
+        // Проверка жив ли игрок
+        bool playerAlive = false;
+        Snake* playerSnake = nullptr;
+
+        for (auto snake : snakes) {
+            if (snake->isPlayer && snake->isAlive) {
+                playerAlive = true;
+                playerSnake = snake;
+                break;
+            }
+        }
+
+        // Если игрок умер
+        if (!playerAlive) {
+            endRound(false);
+            return;
+        }
+
+        // Проверка жив ли хоть один бот
+        bool botsAlive = false;
+        for (auto snake : snakes) {
+            if (!snake->isPlayer && snake->isAlive) {
+                botsAlive = true;
+                break;
+            }
+        }
+
+        // Если нет ботов и это последний раунд - конец игры
+        if (!botsAlive) {
+            if (gameData.currentRound >= gameData.totalRounds) {
+                endGame(true);
+            }
+            else {
+                endRound(true);
+            }
+        }
+    }
+
+    void endRound(bool playerWon) {
+        if (playerWon) {
+            gameData.roundWins++;
+        }
+
+        if (gameData.currentRound >= gameData.totalRounds) {
+            endGame(playerWon);
+        }
+        else {
+            // Начинаем следующий раунд
+            gameData.currentRound++;
+
+            // Пересоздаем змей с новыми позициями
+            for (auto snake : snakes) {
+                // Случайная позиция
+                snake->body.clear();
+                float x = 100 + rand() % 800;
+                float y = 100 + rand() % 600;
+                snake->body.push_back(sf::Vector2f(x, y));
+
+                for (int i = 1; i < 5; i++) {
+                    snake->body.push_back(sf::Vector2f(x - i * 20, y));
+                }
+
+                snake->isAlive = true;
+                snake->rotation = 0.0f;
+            }
+
+            // Очищаем фрукты
+            for (auto fruit : gameFruits) delete fruit;
+            gameFruits.clear();
+
+            // Создаем новые фрукты
+            for (int i = 0; i < 5; i++) {
+                spawnGameFruit();
+            }
+        }
+    }
+
+    void endGame(bool playerWon) {
+        gameState = GAME_OVER;
+
+        std::string winner;
+        sf::Color winnerColor;
+
+        if (playerWon) {
+            winner = gameData.playerName;
+            winnerColor = gameData.playerColor;
+        }
+        else {
+            // Ищем живого бота
+            for (auto snake : snakes) {
+                if (!snake->isPlayer && snake->isAlive) {
+                    winner = snake->name;
+                    winnerColor = snake->color;
+                    break;
+                }
+            }
+            if (winner.empty()) winner = "No one";
+        }
+
+        gameOverDialog->show(winner, winnerColor,
+            gameData.score, gameData.roundWins,
+            gameData.totalRounds);
+    }
+
+    void handleGameInput(sf::Event& event) {
+        if (gameState != PLAYING) return;
+
+        Snake* playerSnake = nullptr;
+        for (auto snake : snakes) {
+            if (snake->isPlayer) {
+                playerSnake = snake;
+                break;
+            }
+        }
+
+        if (!playerSnake) return;
+
+        if (event.type == sf::Event::KeyPressed) {
+            // Пауза по ESC
+            if (event.key.code == sf::Keyboard::Escape) {
+                gameState = PAUSED;
+                pauseDialog->show();
+                return;
+            }
+
+            // Управление змейкой
+            if (event.key.code == playerSnake->turnLeft) {
+                playerSnake->rotation -= playerSnake->rotationSpeed * 0.016f;
+            }
+            else if (event.key.code == playerSnake->turnRight) {
+                playerSnake->rotation += playerSnake->rotationSpeed * 0.016f;
+            }
+            else if (event.key.code == playerSnake->accelerate) {
+                playerSnake->speed = std::min(playerSnake->speed + 50.0f, 300.0f);
+            }
+            else if (event.key.code == playerSnake->decelerate) {
+                playerSnake->speed = std::max(playerSnake->speed - 50.0f, 50.0f);
+            }
+        }
+
+        // Непрерывное управление при удерживании клавиш
+        if (sf::Keyboard::isKeyPressed(playerSnake->turnLeft)) {
+            playerSnake->rotation -= playerSnake->rotationSpeed * 0.016f;
+        }
+        if (sf::Keyboard::isKeyPressed(playerSnake->turnRight)) {
+            playerSnake->rotation += playerSnake->rotationSpeed * 0.016f;
+        }
+        if (sf::Keyboard::isKeyPressed(playerSnake->accelerate)) {
+            playerSnake->speed = std::min(playerSnake->speed + 30.0f * 0.016f, 300.0f);
+        }
+        if (sf::Keyboard::isKeyPressed(playerSnake->decelerate)) {
+            playerSnake->speed = std::max(playerSnake->speed - 30.0f * 0.016f, 50.0f);
+        }
+    }
+
+    void renderGame() {
+        if (gameState == MENU) return;
+
+        // Рисуем фон
+        sf::RectangleShape gameBg;
+        gameBg.setSize(sf::Vector2f(1000, 900));
+        gameBg.setFillColor(sf::Color(20, 40, 20));
+        window->draw(gameBg);
+
+        // Рисуем игровое поле
+        sf::RectangleShape field;
+        field.setSize(sf::Vector2f(900, 800));
+        field.setPosition(50, 50);
+        field.setFillColor(sf::Color(10, 30, 10));
+        field.setOutlineThickness(2);
+        field.setOutlineColor(sf::Color::White);
+        window->draw(field);
+
+        // Рисуем фрукты
+        for (auto fruit : gameFruits) {
+            window->draw(fruit->shape);
+        }
+
+        // Рисуем змей
+        for (auto snake : snakes) {
+            snake->draw(*window);
+        }
+
+        // Рисуем UI
+        renderGameUI();
+    }
+
+    void renderGameUI() {
+        // Текст счета
+        scoreText.setFont(font);
+        scoreText.setString("Score: " + std::to_string(gameData.score));
+        scoreText.setCharacterSize(24);
+        scoreText.setFillColor(sf::Color::White);
+        scoreText.setPosition(20, 20);
+        window->draw(scoreText);
+
+        // Текст раунда (если многораундовая игра)
+        if (gameData.totalRounds > 1) {
+            roundText.setFont(font);
+            roundText.setString("Round: " + std::to_string(gameData.currentRound) +
+                "/" + std::to_string(gameData.totalRounds));
+            roundText.setCharacterSize(24);
+            roundText.setFillColor(sf::Color::White);
+            roundText.setPosition(20, 60);
+            window->draw(roundText);
+
+            // Счет игры
+            sf::Text gameScoreText;
+            gameScoreText.setFont(font);
+            gameScoreText.setString("Wins: " + std::to_string(gameData.roundWins));
+            gameScoreText.setCharacterSize(24);
+            gameScoreText.setFillColor(sf::Color::Yellow);
+            gameScoreText.setPosition(20, 100);
+            window->draw(gameScoreText);
+        }
+
+        // Имя игрока с цветом
+        playerInfoText.setFont(font);
+        playerInfoText.setString(gameData.playerName);
+        playerInfoText.setCharacterSize(28);
+        playerInfoText.setFillColor(gameData.playerColor);
+        playerInfoText.setPosition(800, 20);
+        window->draw(playerInfoText);
+
+        // Таймер
+        timerText.setFont(font);
+        timerText.setString("Time: " + std::to_string((int)gameData.gameTime) + "s");
+        timerText.setCharacterSize(24);
+        timerText.setFillColor(sf::Color::White);
+        timerText.setPosition(800, 60);
+        window->draw(timerText);
+
+        // Инструкция
+        if (gameState == PLAYING) {
+            sf::Text instruction;
+            instruction.setFont(font);
+            instruction.setString("ESC - Pause");
+            instruction.setCharacterSize(18);
+            instruction.setFillColor(sf::Color(200, 200, 200));
+            instruction.setPosition(20, 850);
+            window->draw(instruction);
+        }
+    }
+
+    
+
+    
 
     bool init() {
         window = new sf::RenderWindow(sf::VideoMode(1000, 900), "Snake Game Menu");
@@ -503,9 +1413,8 @@ public:
         }
 
         // Пытаемся загрузить фоновое изображение
-        
+
         if (!loadBackground("background.jpg")) {
-            // Если не удалось загрузить background.jpg, пробуем другие варианты
             if (!loadBackground("background.png")) {
                 if (!loadBackground("bg.jpg")) {
                     if (!loadBackground("bg.png")) {
@@ -523,14 +1432,18 @@ public:
         initAbout();
         initExitConfirm();
         initEditKeys();
-        // НОВОЕ: Инициализация настроек сложности
         initDifficultySettings();
+
+        pauseDialog = new PauseDialog(window, &font);
+        gameOverDialog = new GameOverDialog(window, &font);
+
         return true;
     }
 
     void run() {
         sf::Clock clock;
         while (window->isOpen()) {
+            float deltaTime = clock.restart().asSeconds();
             sf::Event event;
             sf::Vector2f mousePos = window->mapPixelToCoords(sf::Mouse::getPosition(*window));
 
@@ -540,66 +1453,112 @@ public:
                     return;
                 }
 
-                // Обработка ввода имени
+                // Обработка в зависимости от состояния игры
+                switch (gameState) {
+                case MENU:
+                    // Существующая обработка меню
+                    if (!nameInputActive && !keyInputActive) {
+                        if (event.type == sf::Event::MouseButtonPressed &&
+                            event.mouseButton.button == sf::Mouse::Left) {
+                            handleClick(mousePos);
+                        }
+                    }
+                    break;
+
+                case PLAYING:
+                    handleGameInput(event);
+                    break;
+
+                case PAUSED:
+                    if (event.type == sf::Event::MouseButtonPressed &&
+                        event.mouseButton.button == sf::Mouse::Left) {
+                        pauseDialog->handleClick(mousePos, std::bind(&GameMenu::handlePauseDialog, this, std::placeholders::_1));
+                    }
+                    break;
+
+                case GAME_OVER:
+                    if (event.type == sf::Event::MouseButtonPressed &&
+                        event.mouseButton.button == sf::Mouse::Left) {
+                        gameOverDialog->handleClick(mousePos, [this](std::string action) {
+                            if (action == "restart") {
+                                startGame(gameData.totalRounds, gameData.totalBots);
+                            }
+                            else if (action == "exit") {
+                                gameState = MENU;
+                                gameOverDialog->hide();
+                                // Очистка игровых объектов
+                                for (auto snake : snakes) delete snake;
+                                for (auto fruit : gameFruits) delete fruit;
+                                snakes.clear();
+                                gameFruits.clear();
+                            }
+                            });
+                    }
+                    break;
+                }
+
+                // Обработка ввода имени/клавиш (как было)
                 if (nameInputActive) {
                     handleNameInput(event);
-                    // Пропускаем остальную обработку событий при активном вводе имени
-                    continue;
                 }
-
-                // Обработка ввода клавиш
                 if (keyInputActive) {
                     handleKeyInput(event);
-                    continue;
-                }
-
-                if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Left) {
-                    handleClick(event.mouseButton.button == sf::Mouse::Left ? mousePos : sf::Vector2f());
-                }
-
-                // Начать редактирование клавиш при нажатии любой клавиши на экране EDIT_KEYS
-                if (currentScreen == Screen::EDIT_KEYS && event.type == sf::Event::KeyPressed) {
-                    if (!keyInputActive) {
-                        keyInputActive = true;
-                        currentKeyIndex = 0;
-                    }
                 }
             }
 
-            // Hover effects
-            if (!nameInputActive && !keyInputActive) { // Не обновляем ховер эффекты при вводе
-                switch (currentScreen) {
-                case Screen::MAIN: handleMouseHover(mainButtons, mousePos); break;
-                case Screen::GAME_SETTINGS: handleMouseHover(gameSettingsButtons, mousePos); break;
-                case Screen::PLAYER_SETTINGS: handleMouseHover(playerSettingsButtons, mousePos); break;
-                case Screen::ABOUT: handleMouseHover(aboutButtons, mousePos); break;
-                case Screen::EXIT_CONFIRM: handleMouseHover(exitConfirmButtons, mousePos); break;
-                case Screen::EDIT_KEYS: handleMouseHover(editKeysButtons, mousePos); break;
-                }
+            // Обновление игры
+            if (gameState == PLAYING) {
+                updateGame(deltaTime);
             }
 
+            // Отрисовка
             window->clear(bgColor);
 
-            // Рисуем фон (картинку или сплошной цвет)
             if (backgroundLoaded) {
                 window->draw(backgroundSprite);
-
-                // Добавляем полупрозрачный черный слой для улучшения читаемости
                 sf::RectangleShape overlay;
                 overlay.setSize(sf::Vector2f(1000, 900));
-                overlay.setFillColor(sf::Color(0, 0, 0, 100)); // Полупрозрачный черный
+                overlay.setFillColor(sf::Color(0, 0, 0, 100));
                 window->draw(overlay);
             }
 
-            render();
-            window->display();
-
-            if (clock.getElapsedTime().asMilliseconds() < 16) {
-                sf::sleep(sf::milliseconds(16) - clock.getElapsedTime());
+            if (gameState == MENU) {
+                render();
             }
-            clock.restart();
+            else {
+                renderGame();
+
+                if (gameState == PAUSED) {
+                    pauseDialog->render();
+                }
+                else if (gameState == GAME_OVER) {
+                    gameOverDialog->render();
+                }
+            }
+
+            window->display();
         }
     }
+    // И добавить новый метод:
+    void handlePauseDialog(std::string action) {
+        if (action == "resume") {
+            gameState = PLAYING;
+            pauseDialog->hide();
+        }
+        else if (action == "restart") {
+            startGame(gameData.totalRounds, gameData.totalBots);
+        }
+        else if (action == "exit") {
+            gameState = MENU;
+            pauseDialog->hide();
+            // Очистка игровых объектов
+            for (auto snake : snakes) delete snake;
+            for (auto fruit : gameFruits) delete fruit;
+            snakes.clear();
+            gameFruits.clear();
+        }
+    }
+
 
     void handleClick(sf::Vector2f mousePos) {
         bool clicked = false;
@@ -628,6 +1587,7 @@ public:
                 else if (action == "Exit") {
                     currentScreen = Screen::EXIT_CONFIRM;
                 }
+                
             }
             break;
 
@@ -650,7 +1610,8 @@ public:
                 }
                 else if (action == "start_game") {
                     std::cout << "Game Starting: " << rounds << " rounds, " << bots << " bots, Difficulty: " << settings.difficulty << std::endl;
-                    window->close();
+                    // ЗАМЕНИТЬ window->close() на:
+                    startGame(rounds, bots);
                 }
                 else if (action == "back") {
                     currentScreen = Screen::MAIN;
@@ -873,10 +1834,12 @@ public:
             diffInfo.setFont(font);
             diffInfo.setCharacterSize(20);
             diffInfo.setFillColor(sf::Color::White);
-            std::string difficultyText = settings.difficulty == 1 ? "Easy (slow spoil)" :
-                settings.difficulty == 2 ? "Medium" :
-                "Hard (fast spoil)";
-            diffInfo.setString("Difficulty: " + difficultyText);
+            std::string diffText;
+            if (settings.difficulty == 1) diffText = "Easy (slow spoil)";
+            else if (settings.difficulty == 2) diffText = "Medium";
+            else diffText = "Hard (fast spoil)";
+            diffInfo.setString("Difficulty: " + diffText);
+            
             diffInfo.setPosition(100, 480);
             sf::Text diffInfoShadow = diffInfo;
             diffInfoShadow.setFillColor(sf::Color::Black);
@@ -1239,6 +2202,8 @@ public:
 
 int main() {
     setlocale(LC_ALL, "Russian");
+    srand(time(0)); 
+
     GameMenu menu;
     if (menu.init()) {
         menu.run();

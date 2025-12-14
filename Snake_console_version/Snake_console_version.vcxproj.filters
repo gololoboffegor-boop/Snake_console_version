@@ -18,5 +18,8 @@
     <ClCompile Include="Snake_console_version.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="game_engine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
