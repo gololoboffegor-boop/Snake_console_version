@@ -1,5 +1,4 @@
-// Snake_console_version.cpp : Tle contains the 'main' function. Program execution begins and ends there.
-//
+
 
 #include <iostream>
 #include <SFML/Graphics.hpp>
@@ -35,6 +34,60 @@ struct Button {
     }
 };
 
+struct Fruit {
+    sf::Vector2f position;
+    float lifetime = 10.0f; // Время жизни в секундах
+    float maxLifetime = 10.0f; // Максимальное время жизни
+    float spoilRate = 1.0f; // Скорость порчи (зависит от сложности)
+    sf::CircleShape shape;
+
+    Fruit(sf::Vector2f pos, float life, float spoil = 1.0f) {
+        position = pos;
+        maxLifetime = life;
+        lifetime = life;
+        spoilRate = spoil;
+        shape.setRadius(15.0f);
+        shape.setPosition(pos);
+        updateAppearance();
+    }
+
+    void update(float deltaTime) {
+        lifetime -= deltaTime * spoilRate;
+        if (lifetime < 0) lifetime = 0;
+        updateAppearance();
+    }
+
+    void updateAppearance() {
+        float freshness = lifetime / maxLifetime; // 1.0 = свежий, 0.0 = испортился
+
+        // Меняем цвет в зависимости от свежести
+        if (freshness > 0.7f) {
+            shape.setFillColor(sf::Color(0, 255, 0, 255)); // Зеленый - свежий
+        }
+        else if (freshness > 0.4f) {
+            shape.setFillColor(sf::Color(255, 255, 0, 200)); // Желтый - начинает портиться
+        }
+        else if (freshness > 0.2f) {
+            shape.setFillColor(sf::Color(255, 165, 0, 150)); // Оранжевый - почти испорчен
+        }
+        else {
+            shape.setFillColor(sf::Color(255, 0, 0, 100)); // Красный - испорчен
+        }
+
+        // Меняем размер в зависимости от свежести
+        float scale = 0.5f + freshness * 0.5f;
+        shape.setScale(scale, scale);
+    }
+
+    bool isSpoiled() const {
+        return lifetime <= 0;
+    }
+
+    bool isGood() const {
+        return lifetime > 0.2f * maxLifetime; // Считаем хорошим, если свежесть > 20%
+    }
+};
+
 struct Settings {
     std::string playerName = "Player";
     sf::Color playerColor = sf::Color::Blue;
@@ -43,12 +96,14 @@ struct Settings {
     std::vector<sf::Keyboard::Key> playerKeys = {
         sf::Keyboard::W, sf::Keyboard::A, sf::Keyboard::S, sf::Keyboard::D
     };
+    int difficulty = 1; // 1 - легкая, 2 - средняя, 3 - сложная
 };
 
 class GameMenu {
 private:
     sf::RenderWindow* window;
     sf::Font font;
+    float demoTime = 0.0f; // для демонстрации фруктов
     sf::Color bgColor = sf::Color(30, 30, 50);
     sf::Color titleColor = sf::Color::White;
 
@@ -57,18 +112,20 @@ private:
     sf::Sprite backgroundSprite;
     bool backgroundLoaded = false;
 
-    // Current screen state
+    // текучее состояние экрана
     enum class Screen { MAIN, GAME_SETTINGS, PLAYER_SETTINGS, ABOUT, EXIT_CONFIRM, EDIT_KEYS };
     Screen currentScreen = Screen::MAIN;
 
-    // Game settings
+    // настройки игры
     int rounds = 1;
     int bots = 0;
 
-    // Player settings
+    // настройки игрока
     Settings settings;
 
-    // Buttons for each screen
+    // кнопки
+    std::vector<Button*> difficultyButtons;//выбора сложности
+    std::vector<Fruit*> exampleFruits;//визуализация примеров фруктов
     std::vector<Button*> mainButtons;
     std::vector<Button*> gameSettingsButtons;
     std::vector<Button*> playerSettingsButtons;
@@ -76,7 +133,7 @@ private:
     std::vector<Button*> exitConfirmButtons;
     std::vector<Button*> editKeysButtons;
 
-    // Input handling
+    // внутреннее обращение
     bool nameInputActive = false;
     bool keyInputActive = false;
     int currentKeyIndex = 0;
@@ -169,6 +226,23 @@ private:
         mainButtons.push_back(new Button(font, "Exit", { 400, 490 }, sf::Color(150, 50, 50, 200), sf::Color::White));
 
         for (auto& btn : mainButtons) btn->action = btn->text.getString();
+    }
+
+    void initDifficultySettings() {
+        difficultyButtons.clear();
+        difficultyButtons.push_back(new Button(font, "Easy (slow spoil)", { 100, 250 }, sf::Color(50, 200, 50, 200), sf::Color::White));
+        difficultyButtons.push_back(new Button(font, "Medium", { 100, 330 }, sf::Color(200, 200, 50, 200), sf::Color::White));
+        difficultyButtons.push_back(new Button(font, "Hard (fast spoil)", { 100, 410 }, sf::Color(200, 50, 50, 200), sf::Color::White));
+
+        difficultyButtons[0]->action = "diff_easy";
+        difficultyButtons[1]->action = "diff_medium";
+        difficultyButtons[2]->action = "diff_hard";
+
+        // Создаем примеры фруктов для визуализации
+        exampleFruits.clear();
+        exampleFruits.push_back(new Fruit(sf::Vector2f(400, 250), 10.0f, 0.5f)); // Легкий
+        exampleFruits.push_back(new Fruit(sf::Vector2f(400, 330), 10.0f, 1.0f)); // Средний
+        exampleFruits.push_back(new Fruit(sf::Vector2f(400, 410), 10.0f, 2.0f)); // Сложный
     }
 
     void initGameSettings() {
@@ -306,6 +380,12 @@ private:
                     settings.playerKeys[i] = static_cast<sf::Keyboard::Key>(keyCode);
                 }
             }
+
+            // НОВОЕ: Загрузка сложности
+            if (std::getline(file, line)) {
+                settings.difficulty = std::stoi(line);
+            }
+
             file.close();
         }
     }
@@ -322,6 +402,10 @@ private:
             for (auto key : settings.playerKeys) {
                 file << static_cast<int>(key) << std::endl;
             }
+
+            // НОВОЕ: Сохранение сложности
+            file << settings.difficulty << std::endl;
+
             file.close();
         }
     }
@@ -405,6 +489,9 @@ public:
         for (auto btn : aboutButtons) delete btn;
         for (auto btn : exitConfirmButtons) delete btn;
         for (auto btn : editKeysButtons) delete btn;
+        
+        for (auto btn : difficultyButtons) delete btn;
+        for (auto fruit : exampleFruits) delete fruit;
     }
 
     bool init() {
@@ -416,7 +503,7 @@ public:
         }
 
         // Пытаемся загрузить фоновое изображение
-        // Поддерживаемые форматы: PNG, JPG, BMP, TGA, DDS, PSD, HDR
+        
         if (!loadBackground("background.jpg")) {
             // Если не удалось загрузить background.jpg, пробуем другие варианты
             if (!loadBackground("background.png")) {
@@ -436,7 +523,8 @@ public:
         initAbout();
         initExitConfirm();
         initEditKeys();
-
+        // НОВОЕ: Инициализация настроек сложности
+        initDifficultySettings();
         return true;
     }
 
@@ -561,12 +649,41 @@ public:
                     bots = std::stoi(action.substr(5));
                 }
                 else if (action == "start_game") {
-                    std::cout << "Game Starting: " << rounds << " rounds, " << bots << " bots" << std::endl;
+                    std::cout << "Game Starting: " << rounds << " rounds, " << bots << " bots, Difficulty: " << settings.difficulty << std::endl;
                     window->close();
                 }
                 else if (action == "back") {
                     currentScreen = Screen::MAIN;
                     initMainMenu();
+                }
+            }
+            
+            else {
+                clicked = handleMouseClick(difficultyButtons, mousePos);
+                if (clicked) {
+                    std::string action = "";
+                    for (auto& btn : difficultyButtons) {
+                        if (btn->clicked) {
+                            action = btn->action;
+                            break;
+                        }
+                    }
+
+                    if (action == "diff_easy") {
+                        settings.difficulty = 1;
+                    }
+                    else if (action == "diff_medium") {
+                        settings.difficulty = 2;
+                    }
+                    else if (action == "diff_hard") {
+                        settings.difficulty = 3;
+                    }
+
+                    // Подсветка выбранной кнопки
+                    for (auto& btn : difficultyButtons) {
+                        btn->rect.setOutlineColor(sf::Color::Black);
+                        btn->rect.setOutlineThickness(2);
+                    }
                 }
             }
             break;
@@ -685,7 +802,7 @@ public:
             break;
         }
 
-        // Reset clicked states
+        //
         if (clicked) {
             switch (currentScreen) {
             case Screen::MAIN:
@@ -751,10 +868,85 @@ public:
             window->draw(infoShadow);
             window->draw(info);
 
+            //  Отображаем выбранную сложность
+            sf::Text diffInfo;
+            diffInfo.setFont(font);
+            diffInfo.setCharacterSize(20);
+            diffInfo.setFillColor(sf::Color::White);
+            std::string difficultyText = settings.difficulty == 1 ? "Easy (slow spoil)" :
+                settings.difficulty == 2 ? "Medium" :
+                "Hard (fast spoil)";
+            diffInfo.setString("Difficulty: " + difficultyText);
+            diffInfo.setPosition(100, 480);
+            sf::Text diffInfoShadow = diffInfo;
+            diffInfoShadow.setFillColor(sf::Color::Black);
+            diffInfoShadow.setPosition(102, 482);
+            window->draw(diffInfoShadow);
+            window->draw(diffInfo);
+
+            // Отображаем кнопки настроек игры
             for (auto btn : gameSettingsButtons) {
                 window->draw(btn->rect);
                 window->draw(btn->text);
             }
+
+            
+            for (auto btn : difficultyButtons) {
+                // Подсветка выбранной сложности
+                if ((settings.difficulty == 1 && btn->action == "diff_easy") ||
+                    (settings.difficulty == 2 && btn->action == "diff_medium") ||
+                    (settings.difficulty == 3 && btn->action == "diff_hard")) {
+                    btn->rect.setOutlineColor(sf::Color::Yellow);
+                    btn->rect.setOutlineThickness(3);
+                }
+                else {
+                    btn->rect.setOutlineColor(sf::Color::Black);
+                    btn->rect.setOutlineThickness(2);
+                }
+
+                window->draw(btn->rect);
+                window->draw(btn->text);
+            }
+
+            
+            sf::Text fruitDemoText;
+            fruitDemoText.setFont(font);
+            fruitDemoText.setCharacterSize(18);
+            fruitDemoText.setFillColor(sf::Color::White);
+            fruitDemoText.setString("Fruit spoilage demo:");
+            fruitDemoText.setPosition(600, 230);
+            window->draw(fruitDemoText);
+
+            // Создаем примеры фруктов для демонстрации
+            std::vector<Fruit> demoFruits;
+            demoFruits.push_back(Fruit(sf::Vector2f(600, 270), 10.0f, 0.5f)); // Легкий
+            demoFruits.push_back(Fruit(sf::Vector2f(600, 350), 10.0f, 1.0f)); // Средний  
+            demoFruits.push_back(Fruit(sf::Vector2f(600, 430), 10.0f, 2.0f)); // Сложный
+
+            // Обновляем и отрисовываем фрукты
+            static float demoTime = 0;
+            demoTime += 0.016f;
+
+            for (size_t i = 0; i < demoFruits.size(); i++) {
+                // Устанавливаем разную степень свежести для демонстрации
+                demoFruits[i].lifetime = 10.0f - (demoTime * (i + 1) * 0.5f);
+                if (demoFruits[i].lifetime < 0) demoFruits[i].lifetime = 0;
+                demoFruits[i].updateAppearance();
+                window->draw(demoFruits[i].shape);
+
+                // Подписи под фруктами
+                sf::Text fruitLabel;
+                fruitLabel.setFont(font);
+                fruitLabel.setCharacterSize(16);
+                fruitLabel.setFillColor(sf::Color::White);
+                std::string freshness = std::to_string(static_cast<int>((demoFruits[i].lifetime / 10.0f) * 100)) + "%";
+                fruitLabel.setString("Fresh: " + freshness);
+                fruitLabel.setPosition(600, 300 + i * 80);
+                window->draw(fruitLabel);
+            }
+
+            // Сброс демо-таймера
+            if (demoTime > 20.0f) demoTime = 0;
             break;
         }
 
