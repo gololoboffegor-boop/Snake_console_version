@@ -167,132 +167,146 @@ struct GameData {
 // Класс змейки
 class Snake {
 public:
-    std::vector<sf::Vector2f> body;
-    std::vector<float> segmentRadii; // Радиусы сегментов
+    std::vector<sf::Vector2f> body; // Позиции сегментов
     sf::Color color;
     float speed;
-    float rotation;
-    float rotationSpeed;
+    sf::Vector2f direction; // Направление движения (по осям)
+    sf::Vector2f nextDirection; // Следующее направление
     int score;
     std::string name;
     bool isPlayer;
     bool isAlive;
+    float rotation;
+    float moveTimer; // Таймер для движения
+    float moveInterval; // Интервал между движениями
+    int cellSize; // Размер ячейки
 
     // Управление
-    sf::Keyboard::Key turnLeft;
-    sf::Keyboard::Key turnRight;
-    sf::Keyboard::Key accelerate;
-    sf::Keyboard::Key decelerate;
+    sf::Keyboard::Key moveUp;
+    sf::Keyboard::Key moveDown;
+    sf::Keyboard::Key moveLeft;
+    sf::Keyboard::Key moveRight;
 
     Snake(const std::string& n, const sf::Color& c, bool player = true) {
         name = n;
         color = c;
-        speed = 100.0f; // Медленнее для начала
-        rotation = 0.0f;
-        rotationSpeed = 120.0f; // Медленнее повороты
         score = 0;
         isPlayer = player;
         isAlive = true;
+        cellSize = 20; // Размер ячейки сетки
 
-        // Начальная позиция - голова и 3 сегмента
-        float startX = 400 + (rand() % 200 - 100); // Случайная позиция
-        float startY = 400 + (rand() % 200 - 100);
+        // Начальная позиция - только голова
+        float startX = 500;
+        float startY = 400;
 
         body.clear();
-        segmentRadii.clear();
+        body.push_back(sf::Vector2f(startX, startY)); // Только голова
 
-        // Голова
-        body.push_back(sf::Vector2f(startX, startY));
-        segmentRadii.push_back(12.0f); // Радиус головы
+        // Начальное направление
+        direction = sf::Vector2f(1, 0); // Движение вправо
+        nextDirection = direction;
 
-        // 3 начальных сегмента
-        for (int i = 1; i < 4; i++) {
-            body.push_back(sf::Vector2f(startX - i * 25, startY));
-            segmentRadii.push_back(10.0f); // Одинаковый радиус для тела
-        }
+        // Таймеры движения
+        moveTimer = 0.0f;
+        moveInterval = 0.15f; // Интервал движения (секунды)
 
         // Управление по умолчанию
-        turnLeft = sf::Keyboard::A;
-        turnRight = sf::Keyboard::D;
-        accelerate = sf::Keyboard::W;
-        decelerate = sf::Keyboard::S;
+        moveUp = sf::Keyboard::W;
+        moveDown = sf::Keyboard::S;
+        moveLeft = sf::Keyboard::A;
+        moveRight = sf::Keyboard::D;
     }
 
     void update(float deltaTime) {
         if (!isAlive) return;
 
-        // Обновление позиции
-        float radians = rotation * 3.14159f / 180.0f;
-        sf::Vector2f velocity(cos(radians) * speed * deltaTime,
-            sin(radians) * speed * deltaTime);
+        // Обновляем таймер
+        moveTimer += deltaTime;
 
-        // Сохраняем старые позиции
-        std::vector<sf::Vector2f> oldPositions = body;
+        // Двигаемся когда таймер достигает интервала
+        if (moveTimer >= moveInterval) {
+            moveTimer = 0.0f;
 
-        // Двигаем голову
-        body[0] += velocity;
+            // Обновляем направление
+            direction = nextDirection;
 
-        // Двигаем тело (следование за предыдущим сегментом)
-        for (size_t i = 1; i < body.size(); i++) {
-            sf::Vector2f direction = oldPositions[i - 1] - body[i];
-            float distance = sqrt(direction.x * direction.x + direction.y * direction.y);
+            // Сохраняем старые позиции для движения тела
+            std::vector<sf::Vector2f> oldPositions = body;
 
-            if (distance > 20.0f) { // Расстояние между сегментами
-                direction = direction / distance;
-                body[i] = oldPositions[i - 1] - direction * 20.0f;
+            // Двигаем голову
+            sf::Vector2f newHead = body[0] + direction * (float)cellSize;
+
+            // Добавляем новую позицию головы в начало
+            body.insert(body.begin(), newHead);
+
+            // Если нет тела (только голова), убираем "хвост" чтобы сохранить длину 1
+            if (body.size() > 1) {
+                body.pop_back(); // Убираем последний сегмент
             }
         }
     }
 
     void draw(sf::RenderWindow& window) {
         for (size_t i = 0; i < body.size(); i++) {
-            float radius = segmentRadii[i];
-            sf::CircleShape segment(radius);
-
-            // Голова немного больше
-            if (i == 0) {
-                radius = 15.0f;
-                segment.setRadius(radius);
-            }
-
+            sf::RectangleShape segment(sf::Vector2f(cellSize - 2, cellSize - 2)); // -2 для зазоров
             segment.setFillColor(color);
-            // Центрируем круги
-            segment.setOrigin(radius, radius);
-            segment.setPosition(body[i]);
 
-            // Голова направлена в сторону движения
+            // Голова темнее
             if (i == 0) {
-                segment.setRotation(rotation + 90); // +90 чтобы "нос" смотрел вперед
+                sf::Color headColor = color;
+                headColor.r = std::max(color.r - 40, 0);
+                headColor.g = std::max(color.g - 40, 0);
+                headColor.b = std::max(color.b - 40, 0);
+                segment.setFillColor(headColor);
             }
 
+            segment.setPosition(body[i]);
             window.draw(segment);
         }
     }
 
     void grow() {
-        // Добавляем новый сегмент в конец
-        if (body.size() > 1) {
-            sf::Vector2f last = body.back();
-            sf::Vector2f secondLast = body[body.size() - 2];
-            sf::Vector2f direction = last - secondLast;
-            direction = direction / sqrt(direction.x * direction.x + direction.y * direction.y);
+        // Добавляем новый сегмент в конец (хвост)
+        if (body.size() > 0) {
+            sf::Vector2f tail = body.back();
 
-            body.push_back(last + direction * 20.0f);
-            segmentRadii.push_back(10.0f); // Такой же радиус как у тела
+            // Пытаемся добавить в направлении противоположном движению
+            if (body.size() > 1) {
+                sf::Vector2f lastSegment = body[body.size() - 1];
+                sf::Vector2f secondLastSegment = body[body.size() - 2];
+                sf::Vector2f growthDirection = lastSegment - secondLastSegment;
+
+                // Нормализуем если не нулевой
+                float length = sqrt(growthDirection.x * growthDirection.x + growthDirection.y * growthDirection.y);
+                if (length > 0) {
+                    growthDirection = growthDirection / length;
+                    body.push_back(tail + growthDirection * (float)cellSize);
+                }
+                else {
+                    body.push_back(tail + sf::Vector2f(cellSize, 0));
+                }
+            }
+            else {
+                // Если только голова, добавляем в противоположном направлении движения
+                body.push_back(tail - direction * (float)cellSize);
+            }
         }
-        else {
-            // Если только голова
-            body.push_back(body[0] + sf::Vector2f(-20, 0));
-            segmentRadii.push_back(10.0f);
-        }
+
         score += 10;
 
-        // Немного увеличиваем скорость при росте
-        speed = std::min(speed + 5.0f, 200.0f);
+        // Немного ускоряемся с ростом
+        moveInterval = std::max(moveInterval * 0.95f, 0.08f);
     }
 
     sf::Vector2f getHeadPosition() const {
         return body[0];
+    }
+
+    void setDirection(sf::Vector2f newDir) {
+        // Нельзя развернуться на 180 градусов
+        if (newDir != -direction) {
+            nextDirection = newDir;
+        }
     }
 };
 
@@ -1001,7 +1015,7 @@ public:
         std::cout << "=== STARTING GAME ===" << std::endl;
         std::cout << "Rounds: " << rounds << ", Bots: " << bots << std::endl;
         std::cout << "Difficulty: " << settings.difficulty << std::endl;
-    
+
         gameState = PLAYING;
         gameData.totalRounds = rounds;
         gameData.totalBots = bots;
@@ -1017,74 +1031,89 @@ public:
         snakes.clear();
         gameFruits.clear();
 
-        // Создание игрока
+        // Создание игрока - ТОЛЬКО ГОЛОВА
         Snake* player = new Snake(settings.playerName, settings.playerColor);
-        player->turnLeft = settings.playerKeys[1];  // A
-        player->turnRight = settings.playerKeys[3]; // D
-        player->accelerate = settings.playerKeys[0]; // W
-        player->decelerate = settings.playerKeys[2]; // S
+
+        // Настройка управления
+        player->moveUp = settings.playerKeys[0];    // W
+        player->moveDown = settings.playerKeys[2];  // S
+        player->moveLeft = settings.playerKeys[1];  // A
+        player->moveRight = settings.playerKeys[3]; // D
 
         // Настройка скорости в зависимости от сложности
         switch (settings.difficulty) {
-        case 1: player->speed = 120.0f; break;
-        case 2: player->speed = 180.0f; break;
-        case 3: player->speed = 240.0f; break;
+        case 1: player->moveInterval = 0.2f; break;   // Легкая - медленно
+        case 2: player->moveInterval = 0.15f; break;  // Средняя
+        case 3: player->moveInterval = 0.1f; break;   // Сложная - быстро
         }
 
         snakes.push_back(player);
         gameData.playerName = settings.playerName;
         gameData.playerColor = settings.playerColor;
-    
-        std::cout << "Player created at position: " 
-                  << player->body[0].x << ", " << player->body[0].y << std::endl;
+
+        std::cout << "Player created - only head" << std::endl;
 
         // Создание ботов
         for (int i = 0; i < bots; i++) {
             Snake* bot = new Snake("Bot " + std::to_string(i + 1), settings.botColor, false);
+            // Боты тоже начинают с одной головы
             bot->body[0] = sf::Vector2f(200 + i * 150, 200 + i * 100);
-            for (size_t j = 1; j < bot->body.size(); j++) {
-                bot->body[j] = sf::Vector2f(180 + i * 150 - (j - 1) * 20, 200 + i * 100);
-            }
             snakes.push_back(bot);
-            std::cout << "Bot " << i+1 << " created at position: " 
-                      << bot->body[0].x << ", " << bot->body[0].y << std::endl;
         }
 
         // Создание начальных фруктов
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 3; i++) { // Меньше фруктов для начала
             spawnGameFruit();
         }
-    
+
         std::cout << "Fruits created: " << gameFruits.size() << std::endl;
 
         gameClock.restart();
         fruitSpawnClock.restart();
-    
+
         std::cout << "Game started successfully!" << std::endl;
     }
 
     void spawnGameFruit() {
-        int attempts = 0;
-        const int maxAttempts = 100;
+        // Размер ячейки (берем у первой змейки если есть)
+        int cellSize = 20;
+        if (!snakes.empty()) {
+            cellSize = snakes[0]->cellSize;
+        }
 
-        while (attempts < maxAttempts) {
-            float x = 100 + rand() % 800;
-            float y = 100 + rand() % 600;
+        // Сетка игрового поля (исключая границы)
+        int minX = 50;
+        int maxX = 950 - cellSize;
+        int minY = 50;
+        int maxY = 850 - cellSize;
 
-            // Проверяем, не слишком ли близко к другим фруктам
-            bool tooClose = false;
-            for (auto fruit : gameFruits) {
-                float dx = x - fruit->position.x;
-                float dy = y - fruit->position.y;
-                float distance = sqrt(dx * dx + dy * dy);
+        int gridWidth = (maxX - minX) / cellSize;
+        int gridHeight = (maxY - minY) / cellSize;
 
-                if (distance < 40.0f) { // Минимальное расстояние между фруктами
-                    tooClose = true;
-                    break;
+        // Ищем свободную ячейку
+        for (int attempt = 0; attempt < 100; attempt++) {
+            int gridX = rand() % gridWidth;
+            int gridY = rand() % gridHeight;
+
+            float x = minX + gridX * cellSize;
+            float y = minY + gridY * cellSize;
+
+            // Проверяем, не занята ли ячейка змейкой
+            bool occupied = false;
+            for (auto snake : snakes) {
+                for (auto& segment : snake->body) {
+                    int segCellX = (int)(segment.x / cellSize) * cellSize;
+                    int segCellY = (int)(segment.y / cellSize) * cellSize;
+
+                    if (abs(segCellX - x) < cellSize && abs(segCellY - y) < cellSize) {
+                        occupied = true;
+                        break;
+                    }
                 }
+                if (occupied) break;
             }
 
-            if (!tooClose) {
+            if (!occupied) {
                 float spoilRate = 1.0f;
                 switch (settings.difficulty) {
                 case 1: spoilRate = 0.5f; break;
@@ -1095,21 +1124,7 @@ public:
                 gameFruits.push_back(new Fruit(sf::Vector2f(x, y), 10.0f, spoilRate));
                 return;
             }
-
-            attempts++;
         }
-
-        // Если не нашли подходящее место, размещаем где угодно
-        float x = 100 + rand() % 800;
-        float y = 100 + rand() % 600;
-        float spoilRate = 1.0f;
-        switch (settings.difficulty) {
-        case 1: spoilRate = 0.5f; break;
-        case 2: spoilRate = 1.0f; break;
-        case 3: spoilRate = 2.0f; break;
-        }
-
-        gameFruits.push_back(new Fruit(sf::Vector2f(x, y), 10.0f, spoilRate));
     }
 
     void updateGame(float deltaTime) {
@@ -1148,17 +1163,20 @@ public:
             for (auto snake : snakes) {
                 if (!snake->isAlive) continue;
 
-                float dx = snake->getHeadPosition().x - gameFruits[i]->position.x;
-                float dy = snake->getHeadPosition().y - gameFruits[i]->position.y;
-                float distance = sqrt(dx * dx + dy * dy);
+                // Проверяем столкновение головы с фруктом
+                sf::Vector2f headPos = snake->getHeadPosition();
+                sf::Vector2f fruitPos = gameFruits[i]->position;
 
-                if (distance < 30.0f) {
+                // Проверка по сетке (совпадение ячеек)
+                int headCellX = (int)(headPos.x / snake->cellSize) * snake->cellSize;
+                int headCellY = (int)(headPos.y / snake->cellSize) * snake->cellSize;
+                int fruitCellX = (int)(fruitPos.x / snake->cellSize) * snake->cellSize;
+                int fruitCellY = (int)(fruitPos.y / snake->cellSize) * snake->cellSize;
+
+                if (headCellX == fruitCellX && headCellY == fruitCellY) {
                     snake->grow();
                     gameFruits[i]->isGood = false;
                     gameData.score = snake->score;
-
-                    // Увеличение скорости при съедении фрукта
-                    snake->speed = std::min(snake->speed + 10.0f, 300.0f);
                     break;
                 }
             }
@@ -1168,8 +1186,7 @@ public:
         gameFruits.erase(std::remove_if(gameFruits.begin(), gameFruits.end(),
             [](Fruit* f) { return !f->isGood; }), gameFruits.end());
 
-        // Проверка столкновений со стенами (ВРЕМЕННО отключить)
-        /*
+        // Проверка столкновений со стенами
         for (auto snake : snakes) {
             if (!snake->isAlive) continue;
 
@@ -1178,63 +1195,16 @@ public:
                 snake->isAlive = false;
             }
         }
-        */
 
-        // Проверка столкновений с телами (ВРЕМЕННО отключить - змейка сразу сталкивается с собой!)
-        /*
+        // Проверка столкновений с телами (только если есть тело)
         for (auto snake : snakes) {
             if (!snake->isAlive) continue;
 
-            for (size_t i = 1; i < snake->body.size(); i++) {
-                float dx = snake->getHeadPosition().x - snake->body[i].x;
-                float dy = snake->getHeadPosition().y - snake->body[i].y;
-                float distance = sqrt(dx * dx + dy * dy);
-
-                if (distance < 25.0f) {
+            // Проверяем столкновение головы с телом (начиная с 4 сегмента, чтобы не убивать сразу)
+            for (size_t i = 3; i < snake->body.size(); i++) {
+                if (snake->getHeadPosition() == snake->body[i]) {
                     snake->isAlive = false;
                     break;
-                }
-            }
-        }
-        */
-
-        // Проверка столкновений между змеями
-        for (size_t i = 0; i < snakes.size(); i++) {
-            if (!snakes[i]->isAlive) continue;
-
-            for (size_t j = 0; j < snakes.size(); j++) {
-                if (i == j || !snakes[j]->isAlive) continue;
-
-                // Проверка лобового столкновения
-                float dx = snakes[i]->getHeadPosition().x - snakes[j]->getHeadPosition().x;
-                float dy = snakes[i]->getHeadPosition().y - snakes[j]->getHeadPosition().y;
-                float distance = sqrt(dx * dx + dy * dy);
-
-                if (distance < 30.0f) {
-                    // Если игрок столкнулся с ботом "лоб в лоб" - проигрыш игрока
-                    if (snakes[i]->isPlayer && !snakes[j]->isPlayer) {
-                        snakes[i]->isAlive = false;
-                    }
-                    else if (!snakes[i]->isPlayer && snakes[j]->isPlayer) {
-                        snakes[j]->isAlive = false;
-                    }
-                    else {
-                        // Если два бота столкнулись
-                        snakes[i]->isAlive = false;
-                        snakes[j]->isAlive = false;
-                    }
-                }
-
-                // Проверка столкновения с телом другой змеи
-                for (size_t k = 1; k < snakes[j]->body.size(); k++) {
-                    float dx2 = snakes[i]->getHeadPosition().x - snakes[j]->body[k].x;
-                    float dy2 = snakes[i]->getHeadPosition().y - snakes[j]->body[k].y;
-                    float distance2 = sqrt(dx2 * dx2 + dy2 * dy2);
-
-                    if (distance2 < 25.0f) {
-                        snakes[i]->isAlive = false;
-                        break;
-                    }
                 }
             }
         }
@@ -1353,33 +1323,18 @@ public:
 
         if (!playerSnake) return;
 
-        // Получаем deltaTime для плавного управления
-        static sf::Clock inputClock;
-        float deltaTime = inputClock.restart().asSeconds();
-
-        // Управление поворотом
-        if (sf::Keyboard::isKeyPressed(playerSnake->turnLeft)) {
-            playerSnake->rotation -= playerSnake->rotationSpeed * deltaTime;
+        // Управление движением по сетке
+        if (sf::Keyboard::isKeyPressed(playerSnake->moveUp)) {
+            playerSnake->setDirection(sf::Vector2f(0, -1)); // Вверх
         }
-        if (sf::Keyboard::isKeyPressed(playerSnake->turnRight)) {
-            playerSnake->rotation += playerSnake->rotationSpeed * deltaTime;
+        else if (sf::Keyboard::isKeyPressed(playerSnake->moveDown)) {
+            playerSnake->setDirection(sf::Vector2f(0, 1)); // Вниз
         }
-
-        // Управление скоростью
-        if (sf::Keyboard::isKeyPressed(playerSnake->accelerate)) {
-            playerSnake->speed = std::min(playerSnake->speed + 80.0f * deltaTime, 200.0f);
+        else if (sf::Keyboard::isKeyPressed(playerSnake->moveLeft)) {
+            playerSnake->setDirection(sf::Vector2f(-1, 0)); // Влево
         }
-        if (sf::Keyboard::isKeyPressed(playerSnake->decelerate)) {
-            playerSnake->speed = std::max(playerSnake->speed - 80.0f * deltaTime, 50.0f);
-        }
-
-        // Автоматическое замедление
-        if (!sf::Keyboard::isKeyPressed(playerSnake->accelerate) &&
-            !sf::Keyboard::isKeyPressed(playerSnake->decelerate)) {
-            // Постепенное замедление до базовой скорости
-            if (playerSnake->speed > 100.0f) {
-                playerSnake->speed -= 20.0f * deltaTime;
-            }
+        else if (sf::Keyboard::isKeyPressed(playerSnake->moveRight)) {
+            playerSnake->setDirection(sf::Vector2f(1, 0)); // Вправо
         }
     }
 
@@ -1392,7 +1347,7 @@ public:
         gameBg.setFillColor(sf::Color(20, 40, 20));
         window->draw(gameBg);
 
-        // Рисуем игровое поле
+        // Рисуем игровое поле с сеткой
         sf::RectangleShape field;
         field.setSize(sf::Vector2f(900, 800));
         field.setPosition(50, 50);
@@ -1400,6 +1355,27 @@ public:
         field.setOutlineThickness(2);
         field.setOutlineColor(sf::Color::White);
         window->draw(field);
+
+        // Рисуем сетку (опционально)
+        if (snakes.size() > 0) {
+            int cellSize = snakes[0]->cellSize;
+
+            // Горизонтальные линии
+            for (int y = 50; y <= 850; y += cellSize) {
+                sf::RectangleShape line(sf::Vector2f(900, 1));
+                line.setPosition(50, y);
+                line.setFillColor(sf::Color(30, 50, 30, 50));
+                window->draw(line);
+            }
+
+            // Вертикальные линии
+            for (int x = 50; x <= 950; x += cellSize) {
+                sf::RectangleShape line(sf::Vector2f(1, 800));
+                line.setPosition(x, 50);
+                line.setFillColor(sf::Color(30, 50, 30, 50));
+                window->draw(line);
+            }
+        }
 
         // Рисуем фрукты
         for (auto fruit : gameFruits) {
