@@ -2247,7 +2247,7 @@ public:
         }
 
         if (gameState == MENU) {
-            // ========== ОТРИСОВКА ЗАГОЛОВКА ТОЛЬКО НА ГЛАВНОМ ЭКРАНЕ ==========
+            
             if (showTitle && currentScreen == Screen::MAIN) {
                 sf::Text title;
                 title.setFont(font);
@@ -2269,7 +2269,7 @@ public:
                 window->draw(titleShadow);
                 window->draw(title);
             }
-            // ========== КОНЕЦ ОТРИСОВКИ ЗАГОЛОВКА ==========
+            
 
             sf::Text info;
             info.setFont(font);
@@ -2407,8 +2407,6 @@ public:
                 window->draw(title);
 
                 
-
-                
                 sf::Text colorTitle;
                 colorTitle.setFont(font);
                 colorTitle.setString("Цвет игрока:");
@@ -2417,7 +2415,30 @@ public:
                 colorTitle.setPosition(100, 160);
                 window->draw(colorTitle);
 
-                // Кнопки цветов в ряд (4 штуки)
+                // Отображаем текущий выбранный цвет рядом с заголовком
+                sf::Text currentColorText;
+                currentColorText.setFont(font);
+
+                // Определяем название цвета в зависимости от выбранного
+                std::string colorName = "Неизвестно";
+
+                // Сравниваем с предопределенными цветами SFML
+                if (settings.playerColor == sf::Color::Green) colorName = "Зеленый";
+                else if (settings.playerColor == sf::Color::Blue) colorName = "Синий";
+                else if (settings.playerColor == sf::Color::Red) colorName = "Красный";
+                else if (settings.playerColor == sf::Color::Magenta) colorName = "Фиолетовый";
+                else if (settings.playerColor == sf::Color::Yellow) colorName = "Желтый";
+                else if (settings.playerColor == sf::Color::Cyan) colorName = "Голубой";
+                else if (settings.playerColor == sf::Color::White) colorName = "Белый";
+                else if (settings.playerColor == sf::Color::Black) colorName = "Черный";
+
+                currentColorText.setString("(" + colorName + ")");
+                currentColorText.setCharacterSize(20);
+                currentColorText.setFillColor(sf::Color(255, 255, 150));
+                currentColorText.setPosition(260, 160);
+                window->draw(currentColorText);
+
+                
                 float colorStartX = 100;
                 float colorY = 200;
                 float colorSpacing = 200;
@@ -2433,15 +2454,15 @@ public:
                         textBounds.top + textBounds.height / 2.0f
                     );
                     playerSettingsButtons[i]->text.setPosition(
-                        colorStartX + i * colorSpacing + 90, // X кнопки + половина ширины
-                        colorY + 25 // Y кнопки + половина высоты
+                        colorStartX + i * colorSpacing + 90, 
+                        colorY + 25 
                     );
 
                     window->draw(playerSettingsButtons[i]->rect);
                     window->draw(playerSettingsButtons[i]->text);
                 }
 
-                // === СЕКЦИЯ 2: Управление ===
+                
                 sf::Text controlTitle;
                 controlTitle.setFont(font);
                 controlTitle.setString("Управление:");
@@ -2486,7 +2507,7 @@ public:
                 currentKeysText.setPosition(100, 380);
                 window->draw(currentKeysText);
 
-                // === СЕКЦИЯ 3: Имя игрока ===
+                
                 sf::Text nameTitle;
                 nameTitle.setFont(font);
                 nameTitle.setString("Имя игрока:");
@@ -2495,12 +2516,21 @@ public:
                 nameTitle.setPosition(100, 420);
                 window->draw(nameTitle);
 
+                // Отображаем текущее имя рядом с заголовком
+                sf::Text currentNameLabel;
+                currentNameLabel.setFont(font);
+                currentNameLabel.setString("Текущее: " + settings.playerName);
+                currentNameLabel.setCharacterSize(20);
+                currentNameLabel.setFillColor(sf::Color(150, 255, 150));
+                currentNameLabel.setPosition(260, 420);
+                window->draw(currentNameLabel);
+
                 // Кнопка имени (индекс 7)
                 if (7 < playerSettingsButtons.size()) {
                     playerSettingsButtons[7]->rect.setPosition(100, 460);
                     playerSettingsButtons[7]->rect.setSize(sf::Vector2f(400, 50));
 
-                    // Центрируем текст имени
+                    // Центрируем текст в кнопке
                     sf::FloatRect nameBounds = playerSettingsButtons[7]->text.getLocalBounds();
                     playerSettingsButtons[7]->text.setOrigin(
                         nameBounds.left + nameBounds.width / 2.0f,
@@ -2512,7 +2542,7 @@ public:
                     window->draw(playerSettingsButtons[7]->text);
                 }
 
-                // === СЕКЦИЯ 4: Настройки игры ===
+                
                 sf::Text gameTitle;
                 gameTitle.setFont(font);
                 gameTitle.setString("Параметры игры:");
@@ -2521,10 +2551,21 @@ public:
                 gameTitle.setPosition(100, 530);
                 window->draw(gameTitle);
 
-                // Размер поля (индекс 8)
+                // Размер поля (индекс 8) - теперь с нормальными размерами
                 if (8 < playerSettingsButtons.size()) {
                     playerSettingsButtons[8]->rect.setPosition(100, 570);
                     playerSettingsButtons[8]->rect.setSize(sf::Vector2f(300, 50));
+
+                    // Обновляем текст кнопки в зависимости от текущего размера поля
+                    std::string fieldSizeText;
+                    switch (settings.fieldSize) {
+                    case 10: fieldSizeText = "Размер поля: 10x10"; break;
+                    case 15: fieldSizeText = "Размер поля: 15x15"; break;
+                    case 20: fieldSizeText = "Размер поля: 20x20"; break;
+                    case 25: fieldSizeText = "Размер поля: 25x25"; break;
+                    default: fieldSizeText = "Размер поля: " + std::to_string(settings.fieldSize) + "x" + std::to_string(settings.fieldSize); break;
+                    }
+                    playerSettingsButtons[8]->text.setString(fieldSizeText);
 
                     // Центрируем текст
                     sf::FloatRect fieldBounds = playerSettingsButtons[8]->text.getLocalBounds();
@@ -2555,59 +2596,79 @@ public:
                     window->draw(playerSettingsButtons[9]->text);
                 }
 
-               
-                float actionY = 650;
-                float actionSpacing = 200;
+                
+                float actionStartX = 100;    // Левая граница
+                float actionStartY = 750;    // В самый низ экрана
+                float actionSpacing = 220;   // Расстояние между кнопками
 
-                // Сохранить (индекс 10)
+                // Установки по умолчанию (индекс 10)
                 if (10 < playerSettingsButtons.size()) {
-                    playerSettingsButtons[10]->rect.setPosition(200, actionY);
-                    playerSettingsButtons[10]->rect.setSize(sf::Vector2f(200, 60));
+                    playerSettingsButtons[10]->rect.setPosition(actionStartX, actionStartY);
+                    playerSettingsButtons[10]->rect.setSize(sf::Vector2f(250, 60));
+
+                    playerSettingsButtons[10]->text.setString("Установки по умолчанию");
 
                     // Центрируем текст
-                    sf::FloatRect saveBounds = playerSettingsButtons[10]->text.getLocalBounds();
+                    sf::FloatRect defaultBounds = playerSettingsButtons[10]->text.getLocalBounds();
                     playerSettingsButtons[10]->text.setOrigin(
-                        saveBounds.left + saveBounds.width / 2.0f,
-                        saveBounds.top + saveBounds.height / 2.0f
+                        defaultBounds.left + defaultBounds.width / 2.0f,
+                        defaultBounds.top + defaultBounds.height / 2.0f
                     );
-                    playerSettingsButtons[10]->text.setPosition(300, actionY + 30);
+                    playerSettingsButtons[10]->text.setPosition(actionStartX + 125, actionStartY + 30);
 
                     window->draw(playerSettingsButtons[10]->rect);
                     window->draw(playerSettingsButtons[10]->text);
                 }
 
-                // Сбросить (индекс 11)
+                // Сохранить (индекс 11)
                 if (11 < playerSettingsButtons.size()) {
-                    playerSettingsButtons[11]->rect.setPosition(400, actionY);
+                    playerSettingsButtons[11]->rect.setPosition(actionStartX + actionSpacing, actionStartY);
                     playerSettingsButtons[11]->rect.setSize(sf::Vector2f(200, 60));
 
                     // Центрируем текст
-                    sf::FloatRect resetBounds = playerSettingsButtons[11]->text.getLocalBounds();
+                    sf::FloatRect saveBounds = playerSettingsButtons[11]->text.getLocalBounds();
                     playerSettingsButtons[11]->text.setOrigin(
-                        resetBounds.left + resetBounds.width / 2.0f,
-                        resetBounds.top + resetBounds.height / 2.0f
+                        saveBounds.left + saveBounds.width / 2.0f,
+                        saveBounds.top + saveBounds.height / 2.0f
                     );
-                    playerSettingsButtons[11]->text.setPosition(500, actionY + 30);
+                    playerSettingsButtons[11]->text.setPosition(actionStartX + actionSpacing + 100, actionStartY + 30);
 
                     window->draw(playerSettingsButtons[11]->rect);
                     window->draw(playerSettingsButtons[11]->text);
                 }
 
-                // Назад (индекс 12)
+                // Сбросить (индекс 12)
                 if (12 < playerSettingsButtons.size()) {
-                    playerSettingsButtons[12]->rect.setPosition(600, actionY);
+                    playerSettingsButtons[12]->rect.setPosition(actionStartX + 2 * actionSpacing, actionStartY);
                     playerSettingsButtons[12]->rect.setSize(sf::Vector2f(200, 60));
 
                     // Центрируем текст
-                    sf::FloatRect backBounds = playerSettingsButtons[12]->text.getLocalBounds();
+                    sf::FloatRect resetBounds = playerSettingsButtons[12]->text.getLocalBounds();
                     playerSettingsButtons[12]->text.setOrigin(
-                        backBounds.left + backBounds.width / 2.0f,
-                        backBounds.top + backBounds.height / 2.0f
+                        resetBounds.left + resetBounds.width / 2.0f,
+                        resetBounds.top + resetBounds.height / 2.0f
                     );
-                    playerSettingsButtons[12]->text.setPosition(700, actionY + 30);
+                    playerSettingsButtons[12]->text.setPosition(actionStartX + 2 * actionSpacing + 100, actionStartY + 30);
 
                     window->draw(playerSettingsButtons[12]->rect);
                     window->draw(playerSettingsButtons[12]->text);
+                }
+
+                // Назад (индекс 13) - добавляем новую кнопку или переименовываем существующую
+                if (13 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[13]->rect.setPosition(actionStartX + 3 * actionSpacing, actionStartY);
+                    playerSettingsButtons[13]->rect.setSize(sf::Vector2f(200, 60));
+
+                    // Центрируем текст
+                    sf::FloatRect backBounds = playerSettingsButtons[13]->text.getLocalBounds();
+                    playerSettingsButtons[13]->text.setOrigin(
+                        backBounds.left + backBounds.width / 2.0f,
+                        backBounds.top + backBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[13]->text.setPosition(actionStartX + 3 * actionSpacing + 100, actionStartY + 30);
+
+                    window->draw(playerSettingsButtons[13]->rect);
+                    window->draw(playerSettingsButtons[13]->text);
                 }
 
                 // Диалог ввода имени (если активен)
@@ -2639,6 +2700,15 @@ public:
                     inputText.setFillColor(sf::Color::Yellow);
                     inputText.setPosition(320, 420);
                     window->draw(inputText);
+
+                    // Показываем текущее имя под полем ввода
+                    sf::Text currentInfo;
+                    currentInfo.setFont(font);
+                    currentInfo.setString("Текущее: " + settings.playerName);
+                    currentInfo.setCharacterSize(18);
+                    currentInfo.setFillColor(sf::Color(200, 200, 255));
+                    currentInfo.setPosition(320, 470);
+                    window->draw(currentInfo);
                 }
 
                 break;
@@ -2819,7 +2889,8 @@ public:
                 instruction.setFillColor(sf::Color::White);
 
                 if (keyInputActive) {
-                    
+                    instruction.setString("Press key for: " + keyNames[currentKeyIndex] +
+                        "\n(Press Escape to cancel)");
                     instruction.setPosition(300, 250);
 
                     // Подсветка текущей клавиши
@@ -2831,7 +2902,10 @@ public:
                     highlight.setOutlineThickness(2);
                     window->draw(highlight);
                 }
-                
+                else {
+                    instruction.setString("Click on a direction to change its key\nor press any key to start editing");
+                    instruction.setPosition(300, 220);
+                }
 
                 // Тень для инструкции
                 sf::Text instructionShadow = instruction;
