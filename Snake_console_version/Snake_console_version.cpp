@@ -52,9 +52,16 @@ struct Fruit {
         maxLifetime = life;
         lifetime = life;
         spoilRate = spoil;
-        shape.setRadius(15.0f);
-        shape.setPosition(pos);
-        isGood = true; // ИНИЦИАЛИЗИРОВАТЬ
+
+        // Радиус должен быть меньше половины размера клетки
+        shape.setRadius(10.0f);
+
+        // Центрируем фрукт ВНУТРИ клетки
+        shape.setOrigin(10.0f, 10.0f);
+        // Смещаем к центру клетки
+        shape.setPosition(pos.x + 10.0f, pos.y + 10.0f);
+
+        isGood = true;
         updateAppearance();
     }
 
@@ -102,14 +109,46 @@ struct Fruit {
 };
 
 struct Settings {
+    // Настройки игрока
     std::string playerName = "Player";
     sf::Color playerColor = sf::Color::Blue;
     sf::Color botColor = sf::Color::Yellow;
     int fieldSize = 20;
-    std::vector<sf::Keyboard::Key> playerKeys = {
-        sf::Keyboard::W, sf::Keyboard::A, sf::Keyboard::S, sf::Keyboard::D
-    };
     int difficulty = 1; // 1 - легкая, 2 - средняя, 3 - сложная
+
+    // Игровой процесс
+    float snakeSpeed = 100.0f;
+    float snakeRotationSpeed = 150.0f;
+    float accelerationRate = 80.0f;
+    float decelerationRate = 80.0f;
+    float maxSpeed = 200.0f;
+    float minSpeed = 50.0f;
+    int initialSnakeLength = 1; // Начинать с одной головы
+    float fruitSpawnRate = 3.0f;
+    float fruitSpoilRateEasy = 0.5f;
+    float fruitSpoilRateMedium = 1.0f;
+    float fruitSpoilRateHard = 2.0f;
+
+    // Управление
+    std::vector<sf::Keyboard::Key> playerKeys = {
+        sf::Keyboard::W,    // Ускорение/Вверх
+        sf::Keyboard::A,    // Поворот 
+        sf::Keyboard::S,    
+        sf::Keyboard::D     // Поворот вправо/Вправо
+    };
+
+    // Графика
+    bool showGrid = true;
+    bool smoothMovement = true;
+    int snakeSegmentSize = 10;
+    int snakeHeadSize = 12;
+
+    // Звук (можно добавить позже)
+    float soundVolume = 100.0f;
+    float musicVolume = 50.0f;
+    bool soundEnabled = true;
+
+    Settings() = default;
 };
 
 
@@ -178,124 +217,215 @@ public:
     bool isAlive;
     float rotation;
     float moveTimer; // Таймер для движения
-    float moveInterval; // Интервал между движениями
+    float moveInterval = 0.15f; // Интервал между движениями
     int cellSize; // Размер ячейки
-
+    int snakeLength;
+    float moveAccumulator = 0.0f; // Добавьте этот член класса
+    float rotationSpeed;
+    
+    sf::Keyboard::Key turnLeft;
+    sf::Keyboard::Key turnRight;
+    sf::Keyboard::Key accelerate;
+    sf::Keyboard::Key decelerate;
     // Управление
     sf::Keyboard::Key moveUp;
     sf::Keyboard::Key moveDown;
     sf::Keyboard::Key moveLeft;
     sf::Keyboard::Key moveRight;
 
-    Snake(const std::string& n, const sf::Color& c, bool player = true) {
-        name = n;
-        color = c;
-        score = 0;
-        isPlayer = player;
-        isAlive = true;
-        cellSize = 20; // Размер ячейки сетки
+    Snake(const std::string& n, const sf::Color& c, const Settings& gameSettings, bool player = true)
+        : name(n), color(c), speed(gameSettings.snakeSpeed),
+        rotation(0.0f), score(0), isPlayer(player), isAlive(true),
+        moveTimer(0.0f), cellSize(gameSettings.fieldSize),
+        moveInterval(0.15f), snakeLength(gameSettings.initialSnakeLength)
+    {
+        // Выбираем стартовую клетку
+        int startGridX = 25;
+        int startGridY = 22;
 
-        // Начальная позиция - только голова
-        float startX = 500;
-        float startY = 400;
+        // Преобразуем в пиксели (выровнено по сетке)
+        float startX = startGridX * cellSize;
+        float startY = startGridY * cellSize;
 
         body.clear();
-        body.push_back(sf::Vector2f(startX, startY)); // Только голова
+        body.push_back(sf::Vector2f(startX, startY));
+
+        // Начальные сегменты тоже выровнены
+        for (int i = 1; i < gameSettings.initialSnakeLength; i++) {
+            body.push_back(sf::Vector2f(startX - i * cellSize, startY));
+        }
 
         // Начальное направление
-        direction = sf::Vector2f(1, 0); // Движение вправо
+        direction = sf::Vector2f(1, 0); // Вправо
         nextDirection = direction;
 
-        // Таймеры движения
-        moveTimer = 0.0f;
-        moveInterval = 0.15f; // Интервал движения (секунды)
+        // Управление
+        if (player) {
+            moveUp = gameSettings.playerKeys[0];
+            moveDown = gameSettings.playerKeys[2];
+            moveLeft = gameSettings.playerKeys[1];
+            moveRight = gameSettings.playerKeys[3];
+        }
+        else {
+            moveUp = sf::Keyboard::W;
+            moveDown = sf::Keyboard::S;
+            moveLeft = sf::Keyboard::A;
+            moveRight = sf::Keyboard::D;
+        }
+    }
 
-        // Управление по умолчанию
-        moveUp = sf::Keyboard::W;
-        moveDown = sf::Keyboard::S;
-        moveLeft = sf::Keyboard::A;
-        moveRight = sf::Keyboard::D;
+    bool hasEnteredNewCell() {
+        if (body.empty()) return false;
+
+        // Получаем текущую клетку головы
+        int currentCellX = static_cast<int>(body[0].x / cellSize);
+        int currentCellY = static_cast<int>(body[0].y / cellSize);
+
+        // Получаем последнюю известную клетку
+        static int lastCellX = currentCellX;
+        static int lastCellY = currentCellY;
+
+        // Проверяем, изменилась ли клетка
+        bool enteredNewCell = (currentCellX != lastCellX || currentCellY != lastCellY);
+
+        if (enteredNewCell) {
+            lastCellX = currentCellX;
+            lastCellY = currentCellY;
+        }
+
+        return enteredNewCell;
     }
 
     void update(float deltaTime) {
         if (!isAlive) return;
 
-        // Обновляем таймер
+        // Накопление времени для дискретного движения
         moveTimer += deltaTime;
 
-        // Двигаемся когда таймер достигает интервала
+        // Двигаемся только когда накопилось достаточно времени
         if (moveTimer >= moveInterval) {
             moveTimer = 0.0f;
 
-            // Обновляем направление
+            // Обновляем текущее направление
             direction = nextDirection;
 
-            // Сохраняем старые позиции для движения тела
-            std::vector<sf::Vector2f> oldPositions = body;
+            // Сохраняем позиции тела перед движением
+            std::vector<sf::Vector2f> oldBody = body;
 
-            // Двигаем голову
-            sf::Vector2f newHead = body[0] + direction * (float)cellSize;
+            // Двигаем голову на одну клетку
+            sf::Vector2f newHead = body[0];
+            newHead.x += direction.x * cellSize;
+            newHead.y += direction.y * cellSize;
 
-            // Добавляем новую позицию головы в начало
-            body.insert(body.begin(), newHead);
+            // Устанавливаем новую голову
+            body[0] = newHead;
 
-            // Если нет тела (только голова), убираем "хвост" чтобы сохранить длину 1
-            if (body.size() > 1) {
-                body.pop_back(); // Убираем последний сегмент
+            // Двигаем тело: каждый сегмент занимает позицию предыдущего
+            for (size_t i = 1; i < body.size(); i++) {
+                body[i] = oldBody[i - 1];
+            }
+
+            // Отладочный вывод (можно убрать потом)
+            if (isPlayer && body.size() > 3) {
+                // Проверяем возможное столкновение с собой
+                int headCellX = static_cast<int>(body[0].x / cellSize);
+                int headCellY = static_cast<int>(body[0].y / cellSize);
+
+                for (size_t i = 3; i < body.size(); i++) {
+                    int segmentCellX = static_cast<int>(body[i].x / cellSize);
+                    int segmentCellY = static_cast<int>(body[i].y / cellSize);
+
+                    if (headCellX == segmentCellX && headCellY == segmentCellY) {
+                        std::cout << "WARNING: Possible self-collision detected!" << std::endl;
+                        std::cout << "Head cell: (" << headCellX << ", " << headCellY << ")" << std::endl;
+                        std::cout << "Segment " << i << " cell: (" << segmentCellX << ", " << segmentCellY << ")" << std::endl;
+                    }
+                }
             }
         }
     }
 
+    bool checkFruitCollision(Snake* snake, Fruit* fruit) {
+        // Координаты клетки змеи
+        int snakeCellX = static_cast<int>(snake->body[0].x / snake->cellSize);
+        int snakeCellY = static_cast<int>(snake->body[0].y / snake->cellSize);
+
+        // Координаты клетки фрукта
+        int fruitCellX = static_cast<int>(fruit->position.x / snake->cellSize);
+        int fruitCellY = static_cast<int>(fruit->position.y / snake->cellSize);
+
+        // Столкновение, если в одной клетке
+        return (snakeCellX == fruitCellX && snakeCellY == fruitCellY);
+    }
+
     void draw(sf::RenderWindow& window) {
         for (size_t i = 0; i < body.size(); i++) {
-            sf::RectangleShape segment(sf::Vector2f(cellSize - 2, cellSize - 2)); // -2 для зазоров
-            segment.setFillColor(color);
+            // Квадрат размером с клетку
+            sf::RectangleShape segment(sf::Vector2f(cellSize, cellSize));
 
-            // Голова темнее
+            
+            
+            float posX = body[i].x + 1; // +1 пиксель от левой границы
+            float posY = body[i].y + 1; // +1 пиксель от верхней границы
+            segment.setPosition(posX, posY);
+
+            // Цвет
             if (i == 0) {
+                // Голова - темнее
                 sf::Color headColor = color;
-                headColor.r = std::max(color.r - 40, 0);
-                headColor.g = std::max(color.g - 40, 0);
-                headColor.b = std::max(color.b - 40, 0);
+                headColor.r = std::min(color.r + 40, 255);
+                headColor.g = std::min(color.g + 40, 255);
+                headColor.b = std::min(color.b + 40, 255);
                 segment.setFillColor(headColor);
             }
+            else {
+                segment.setFillColor(color);
+            }
 
-            segment.setPosition(body[i]);
+            // Контур
+            segment.setOutlineThickness(1);
+            segment.setOutlineColor(sf::Color::Black);
+
             window.draw(segment);
         }
     }
 
     void grow() {
-        // Добавляем новый сегмент в конец (хвост)
-        if (body.size() > 0) {
-            sf::Vector2f tail = body.back();
+        // Увеличиваем длину
+        snakeLength++;
 
-            // Пытаемся добавить в направлении противоположном движению
+        // Добавляем новый сегмент
+        if (!body.empty()) {
             if (body.size() > 1) {
-                sf::Vector2f lastSegment = body[body.size() - 1];
-                sf::Vector2f secondLastSegment = body[body.size() - 2];
-                sf::Vector2f growthDirection = lastSegment - secondLastSegment;
+                // Вычисляем направление от предпоследнего к последнему сегменту
+                sf::Vector2f tail = body.back();
+                sf::Vector2f prev = body[body.size() - 2];
+                sf::Vector2f dir = tail - prev;
 
-                // Нормализуем если не нулевой
-                float length = sqrt(growthDirection.x * growthDirection.x + growthDirection.y * growthDirection.y);
+                // Нормализуем
+                float length = sqrt(dir.x * dir.x + dir.y * dir.y);
                 if (length > 0) {
-                    growthDirection = growthDirection / length;
-                    body.push_back(tail + growthDirection * (float)cellSize);
+                    dir = dir / length;
                 }
                 else {
-                    body.push_back(tail + sf::Vector2f(cellSize, 0));
+                    dir = -direction; // Направление назад
                 }
+
+                // Новый сегмент позади хвоста
+                sf::Vector2f newSegment = tail + dir * (float)cellSize;
+                body.push_back(newSegment);
             }
             else {
-                // Если только голова, добавляем в противоположном направлении движения
-                body.push_back(tail - direction * (float)cellSize);
+                // Если только голова, добавляем позади
+                sf::Vector2f newSegment = body[0] - direction * (float)cellSize;
+                body.push_back(newSegment);
             }
         }
 
         score += 10;
 
-        // Немного ускоряемся с ростом
-        moveInterval = std::max(moveInterval * 0.95f, 0.08f);
+        // Можно ускорить змейку при росте
+        moveInterval = std::max(moveInterval * 0.98f, 0.05f);
     }
 
     sf::Vector2f getHeadPosition() const {
@@ -303,7 +433,7 @@ public:
     }
 
     void setDirection(sf::Vector2f newDir) {
-        // Нельзя развернуться на 180 градусов
+        // direction должен быть членом класса
         if (newDir != -direction) {
             nextDirection = newDir;
         }
@@ -335,48 +465,48 @@ public:
     void createButtons() {
         buttons.clear();
 
-        // Кнопка "Resume"
+       
         DialogButton btn1;
         btn1.rect.setSize(sf::Vector2f(200, 50));
-        btn1.rect.setPosition(400, 300);
+        btn1.rect.setPosition(400, 320);  
         btn1.rect.setFillColor(sf::Color(50, 150, 50, 220));
         btn1.rect.setOutlineThickness(2);
         btn1.rect.setOutlineColor(sf::Color::White);
         btn1.text.setFont(*font);
-        btn1.text.setString("Resume Game");
+        btn1.text.setString("Продолжить");
         btn1.text.setCharacterSize(24);
         btn1.text.setFillColor(sf::Color::White);
-        btn1.text.setPosition(450, 325);
+        btn1.text.setPosition(450, 375);  
         btn1.action = "resume";
         buttons.push_back(btn1);
 
-        // Кнопка "Restart"
+       
         DialogButton btn2;
         btn2.rect.setSize(sf::Vector2f(200, 50));
-        btn2.rect.setPosition(400, 370);
+        btn2.rect.setPosition(400, 390);  
         btn2.rect.setFillColor(sf::Color(50, 100, 150, 220));
         btn2.rect.setOutlineThickness(2);
         btn2.rect.setOutlineColor(sf::Color::White);
         btn2.text.setFont(*font);
-        btn2.text.setString("Restart Game");
+        btn2.text.setString("Заново");
         btn2.text.setCharacterSize(24);
         btn2.text.setFillColor(sf::Color::White);
-        btn2.text.setPosition(450, 395);
+        btn2.text.setPosition(450, 445);  
         btn2.action = "restart";
         buttons.push_back(btn2);
 
-        // Кнопка "Exit to Menu"
+        
         DialogButton btn3;
         btn3.rect.setSize(sf::Vector2f(200, 50));
-        btn3.rect.setPosition(400, 440);
+        btn3.rect.setPosition(400, 460);  
         btn3.rect.setFillColor(sf::Color(150, 50, 50, 220));
         btn3.rect.setOutlineThickness(2);
         btn3.rect.setOutlineColor(sf::Color::White);
         btn3.text.setFont(*font);
-        btn3.text.setString("Exit to Menu");
+        btn3.text.setString("Выйти в меню");
         btn3.text.setCharacterSize(24);
         btn3.text.setFillColor(sf::Color::White);
-        btn3.text.setPosition(450, 465);
+        btn3.text.setPosition(450, 515);  
         btn3.action = "exit";
         buttons.push_back(btn3);
     }
@@ -408,23 +538,46 @@ public:
         // Диалоговое окно
         sf::RectangleShape dialog;
         dialog.setSize(sf::Vector2f(400, 300));
-        dialog.setPosition(300, 250);
+        dialog.setPosition(300, 250);  
         dialog.setFillColor(sf::Color(30, 30, 50, 230));
         dialog.setOutlineThickness(3);
         dialog.setOutlineColor(sf::Color::White);
         window->draw(dialog);
 
-        // Заголовок
+        
         sf::Text title;
         title.setFont(*font);
-        title.setString("GAME PAUSED");
-        title.setCharacterSize(36);
+        title.setString("ПАУЗА");  
+        title.setCharacterSize(42);
         title.setFillColor(sf::Color::Yellow);
-        title.setPosition(350, 260);
+        title.setStyle(sf::Text::Bold);
+
+        // ЦЕНТРИРОВАНИЕ текста
+        sf::FloatRect titleBounds = title.getLocalBounds();
+        title.setOrigin(titleBounds.left + titleBounds.width / 2.0f,
+            titleBounds.top + titleBounds.height / 2.0f);
+        title.setPosition(500, 280);  
+
+        // Тень текста
+        sf::Text titleShadow = title;
+        titleShadow.setFillColor(sf::Color::Black);
+        titleShadow.setPosition(title.getPosition().x + 2, title.getPosition().y + 2);
+        window->draw(titleShadow);
+
         window->draw(title);
 
-        // Кнопки
+        // Кнопки - также центрируем их
         for (auto& btn : buttons) {
+            // Центрируем текст внутри кнопок
+            sf::FloatRect textBounds = btn.text.getLocalBounds();
+            btn.text.setOrigin(textBounds.left + textBounds.width / 2.0f,
+                textBounds.top + textBounds.height / 2.0f);
+
+            // Устанавливаем позицию текста в центр кнопки
+            sf::FloatRect rectBounds = btn.rect.getGlobalBounds();
+            btn.text.setPosition(rectBounds.left + rectBounds.width / 2.0f,
+                rectBounds.top + rectBounds.height / 2.0f);
+
             window->draw(btn.rect);
             window->draw(btn.text);
         }
@@ -449,7 +602,8 @@ private:
     int playerScore;
     int roundWins;
     int totalRounds;
-
+    
+    std::string deathReason;
 public:
     GameOverDialog(sf::RenderWindow* win, sf::Font* fnt) :
         window(win), font(fnt), visible(false), playerScore(0),
@@ -475,7 +629,7 @@ public:
         btn1.action = "restart";
         buttons.push_back(btn1);
 
-        // Кнопка "Exit"
+        // Кнопка "Exit to Menu"
         DialogButton btn2;
         btn2.rect.setSize(sf::Vector2f(200, 50));
         btn2.rect.setPosition(550, 500);
@@ -483,7 +637,7 @@ public:
         btn2.rect.setOutlineThickness(2);
         btn2.rect.setOutlineColor(sf::Color::White);
         btn2.text.setFont(*font);
-        btn2.text.setString("Exit");
+        btn2.text.setString("Exit to Menu");
         btn2.text.setCharacterSize(24);
         btn2.text.setFillColor(sf::Color::White);
         btn2.text.setPosition(625, 525);
@@ -492,12 +646,13 @@ public:
     }
 
     void show(const std::string& winner, const sf::Color& color,
-        int score, int wins, int rounds) {
+        int score, int wins, int rounds, const std::string& reason = "") {
         winnerName = winner;
         winnerColor = color;
         playerScore = score;
         roundWins = wins;
         totalRounds = rounds;
+        deathReason = reason;
         visible = true;
     }
 
@@ -510,7 +665,7 @@ public:
         for (auto& btn : buttons) {
             if (btn.rect.getGlobalBounds().contains(mousePos)) {
                 callback(btn.action);
-                break;
+                return; 
             }
         }
     }
@@ -542,28 +697,22 @@ public:
         title.setPosition(350, 260);
         window->draw(title);
 
-        // Победитель
-        sf::Text winnerText;
-        winnerText.setFont(*font);
-        winnerText.setString("Winner: " + winnerName);
-        winnerText.setCharacterSize(32);
-        winnerText.setFillColor(winnerColor);
-        winnerText.setPosition(250, 330);
-        window->draw(winnerText);
+        // Причина поражения
+        sf::Text reasonText;
+        reasonText.setFont(*font);
+        reasonText.setString(deathReason);
+        reasonText.setCharacterSize(28);
+        reasonText.setFillColor(sf::Color(255, 100, 100));
+        reasonText.setPosition(300, 330);
+        window->draw(reasonText);
 
         // Счет
         sf::Text scoreText;
         scoreText.setFont(*font);
-        if (totalRounds > 1) {
-            scoreText.setString("Game Score: " + std::to_string(roundWins) +
-                " wins (Total: " + std::to_string(playerScore) + " points)");
-        }
-        else {
-            scoreText.setString("Score: " + std::to_string(playerScore) + " points");
-        }
+        scoreText.setString("Score: " + std::to_string(playerScore) + " points");
         scoreText.setCharacterSize(28);
         scoreText.setFillColor(sf::Color::White);
-        scoreText.setPosition(250, 380);
+        scoreText.setPosition(300, 380);
         window->draw(scoreText);
 
         // Кнопки
@@ -580,7 +729,7 @@ private:
     // Игровые объекты
     std::vector<Snake*> snakes;
     std::vector<Fruit*> gameFruits;
-
+    bool showTitle = true;  // Новый флаг для отображения заголовка
     // Игровое состояние
     GameState gameState;
     GameData gameData;
@@ -724,10 +873,11 @@ private:
 
     void initMainMenu() {
         mainButtons.clear();
-        mainButtons.push_back(new Button(font, "Play", { 400, 250 }, sf::Color(50, 150, 50, 200), sf::Color::White));
-        mainButtons.push_back(new Button(font, "Settings", { 400, 330 }, sf::Color(50, 100, 150, 200), sf::Color::White));
-        mainButtons.push_back(new Button(font, "Developers", { 400, 410 }, sf::Color(100, 100, 150, 200), sf::Color::White));
-        mainButtons.push_back(new Button(font, "Exit", { 400, 490 }, sf::Color(150, 50, 50, 200), sf::Color::White));
+        
+        mainButtons.push_back(new Button(font, "Начать", { 400, 250 }, sf::Color(65, 205, 50), sf::Color::White));
+        mainButtons.push_back(new Button(font, "Настройки", { 400, 330 }, sf::Color(0, 191, 255), sf::Color::White));
+        mainButtons.push_back(new Button(font, "О создателях", { 400, 410 }, sf::Color(147, 112, 219), sf::Color::White));
+        mainButtons.push_back(new Button(font, "Выход", { 400, 490 }, sf::Color(178, 34, 34), sf::Color::White));
 
         for (auto& btn : mainButtons) btn->action = btn->text.getString();
     }
@@ -751,23 +901,32 @@ private:
 
     void initGameSettings() {
         gameSettingsButtons.clear();
-        gameSettingsButtons.push_back(new Button(font, "Quickie (1 round)", { 400, 250 }, sf::Color(70, 170, 70, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "3 rounds", { 400, 330 }, sf::Color(70, 170, 70, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "5 rounds", { 400, 410 }, sf::Color(70, 170, 70, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "0 bots (training)", { 400, 490 }, sf::Color(100, 150, 100, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "1 bot", { 400, 570 }, sf::Color(100, 150, 100, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "2 bots", { 400, 650 }, sf::Color(100, 150, 100, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "Play Game", { 400, 730 }, sf::Color(50, 200, 50, 200), sf::Color::White));
-        gameSettingsButtons.push_back(new Button(font, "Back", { 400, 810 }, sf::Color(150, 100, 50, 200), sf::Color::White));
 
+        // Только выбор игры:
+        gameSettingsButtons.push_back(new Button(font, "Быстрая игра (1 раунд)", { 400, 250 }, sf::Color(70, 170, 70, 200), sf::Color::White));
+        gameSettingsButtons.push_back(new Button(font, "3 раунда", { 400, 330 }, sf::Color(70, 170, 70, 200), sf::Color::White));
+        gameSettingsButtons.push_back(new Button(font, "5 раундов", { 400, 410 }, sf::Color(70, 170, 70, 200), sf::Color::White));
+        gameSettingsButtons.push_back(new Button(font, "Режим выживания", { 400, 490 }, sf::Color(70, 170, 70, 200), sf::Color::White));
+
+        // Боты:
+        gameSettingsButtons.push_back(new Button(font, "0 ботов (тренировка)", { 400, 570 }, sf::Color(100, 150, 100, 200), sf::Color::White));
+        gameSettingsButtons.push_back(new Button(font, "1 бот", { 400, 650 }, sf::Color(100, 150, 100, 200), sf::Color::White));
+        gameSettingsButtons.push_back(new Button(font, "2 ботам", { 400, 730 }, sf::Color(100, 150, 100, 200), sf::Color::White));
+
+        // Кнопки действий:
+        gameSettingsButtons.push_back(new Button(font, "Начать игру", { 400, 810 }, sf::Color(50, 200, 50, 200), sf::Color::White));
+        gameSettingsButtons.push_back(new Button(font, "Назад", { 400, 890 }, sf::Color(150, 100, 50, 200), sf::Color::White));
+
+        // Назначьте действия
         gameSettingsButtons[0]->action = "rounds_1";
         gameSettingsButtons[1]->action = "rounds_3";
         gameSettingsButtons[2]->action = "rounds_5";
-        gameSettingsButtons[3]->action = "bots_0";
-        gameSettingsButtons[4]->action = "bots_1";
-        gameSettingsButtons[5]->action = "bots_2";
-        gameSettingsButtons[6]->action = "start_game";
-        gameSettingsButtons[7]->action = "back";
+        gameSettingsButtons[3]->action = "rounds_survival";
+        gameSettingsButtons[4]->action = "bots_0";
+        gameSettingsButtons[5]->action = "bots_1";
+        gameSettingsButtons[6]->action = "bots_2";
+        gameSettingsButtons[7]->action = "start_game";
+        gameSettingsButtons[8]->action = "back";
     }
 
     void initPlayerSettings() {
@@ -783,7 +942,8 @@ private:
         playerSettingsButtons.push_back(new Button(font, "Field size: " + std::to_string(settings.fieldSize), { 100, 500 }, sf::Color(80, 120, 180, 200), sf::Color::White));
         playerSettingsButtons.push_back(new Button(font, "Save", { 350, 550 }, sf::Color(50, 150, 100, 200), sf::Color::White));
         playerSettingsButtons.push_back(new Button(font, "Back", { 550, 550 }, sf::Color(150, 100, 50, 200), sf::Color::White));
-
+        playerSettingsButtons.push_back(new Button(font, "Reset to Default", { 100, 650 }, sf::Color(150, 100, 50, 200), sf::Color::White));
+        
         playerSettingsButtons[0]->action = "color_blue";
         playerSettingsButtons[1]->action = "color_green";
         playerSettingsButtons[2]->action = "color_red";
@@ -805,8 +965,8 @@ private:
 
     void initExitConfirm() {
         exitConfirmButtons.clear();
-        exitConfirmButtons.push_back(new Button(font, "Yes", { 300, 400 }, sf::Color(150, 50, 50, 200), sf::Color::White));
-        exitConfirmButtons.push_back(new Button(font, "No", { 500, 400 }, sf::Color(50, 150, 50, 200), sf::Color::White));
+        exitConfirmButtons.push_back(new Button(font, "Да", { 300, 400 }, sf::Color(150, 50, 50, 200), sf::Color::White));
+        exitConfirmButtons.push_back(new Button(font, "Нет", { 500, 400 }, sf::Color(50, 150, 50, 200), sf::Color::White));
 
         exitConfirmButtons[0]->action = "exit_yes";
         exitConfirmButtons[1]->action = "exit_no";
@@ -864,54 +1024,167 @@ private:
     }
 
     void loadSettings() {
-        std::ifstream file("settings.txt");
-        if (file.is_open()) {
-            std::string line;
-            std::getline(file, line);
-            settings.playerName = line;
-            std::getline(file, line);
-            std::istringstream iss(line);
-            int r, g, b;
-            iss >> r >> g >> b;
-            settings.playerColor = sf::Color(r, g, b);
-            std::getline(file, line);
-            settings.fieldSize = std::stoi(line);
+        std::ifstream file("config.ini");
+        if (!file.is_open()) {
+            std::cout << "Config file not found. Using default settings." << std::endl;
+            saveSettings(); // Создаем файл с настройками по умолчанию
+            return;
+        }
 
-            // Загрузка клавиш
-            for (int i = 0; i < 4; i++) {
-                if (std::getline(file, line)) {
-                    int keyCode = std::stoi(line);
-                    settings.playerKeys[i] = static_cast<sf::Keyboard::Key>(keyCode);
+        std::string line;
+        while (std::getline(file, line)) {
+            // Пропускаем комментарии и пустые строки
+            if (line.empty() || line[0] == '#') continue;
+
+            size_t delimiter = line.find('=');
+            if (delimiter == std::string::npos) continue;
+
+            std::string key = line.substr(0, delimiter);
+            std::string value = line.substr(delimiter + 1);
+
+            // Убираем пробелы
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t") + 1);
+
+            // Загружаем настройки
+            if (key == "playerName") {
+                settings.playerName = value;
+            }
+            else if (key == "playerColor") {
+                std::istringstream iss(value);
+                int r, g, b;
+                if (iss >> r >> g >> b) {
+                    settings.playerColor = sf::Color(r, g, b);
                 }
             }
-
-            // НОВОЕ: Загрузка сложности
-            if (std::getline(file, line)) {
-                settings.difficulty = std::stoi(line);
+            else if (key == "botColor") {
+                std::istringstream iss(value);
+                int r, g, b;
+                if (iss >> r >> g >> b) {
+                    settings.botColor = sf::Color(r, g, b);
+                }
             }
+            else if (key == "fieldSize") {
+                settings.fieldSize = std::stoi(value);
+            }
+            else if (key == "difficulty") {
+                settings.difficulty = std::stoi(value);
+            }
+            else if (key == "snakeSpeed") {
+                settings.snakeSpeed = std::stof(value);
+            }
+            else if (key == "snakeRotationSpeed") {
+                settings.snakeRotationSpeed = std::stof(value);
+            }
+            else if (key == "initialSnakeLength") {
+                settings.initialSnakeLength = std::stoi(value);
+            }
+            else if (key == "fruitSpawnRate") {
+                settings.fruitSpawnRate = std::stof(value);
+            }
+            else if (key == "showGrid") {
+                settings.showGrid = (value == "true" || value == "1");
+            }
+            else if (key == "soundVolume") {
+                settings.soundVolume = std::stof(value);
+            }
+            else if (key == "musicVolume") {
+                settings.musicVolume = std::stof(value);
+            }
+            else if (key == "soundEnabled") {
+                settings.soundEnabled = (value == "true" || value == "1");
+            }
+            // Загрузка клавиш управления
+            else if (key == "keyUp" || key == "keyAccelerate") {
+                settings.playerKeys[0] = static_cast<sf::Keyboard::Key>(std::stoi(value));
+            }
+            else if (key == "keyLeft" || key == "keyTurnLeft") {
+                settings.playerKeys[1] = static_cast<sf::Keyboard::Key>(std::stoi(value));
+            }
+            else if (key == "keyDown" || key == "keyDecelerate") {
+                settings.playerKeys[2] = static_cast<sf::Keyboard::Key>(std::stoi(value));
+            }
+            else if (key == "keyRight" || key == "keyTurnRight") {
+                settings.playerKeys[3] = static_cast<sf::Keyboard::Key>(std::stoi(value));
+            }
+        }
 
-            file.close();
+        file.close();
+        std::cout << "Settings loaded from config.ini" << std::endl;
+    }
+    void resetToDefaultSettings() {
+        std::cout << "Resetting to default settings..." << std::endl;
+
+        // Создаем новый объект Settings (он инициализируется значениями по умолчанию)
+        Settings defaultSettings;
+        settings = defaultSettings;
+
+        // Сохраняем настройки по умолчанию
+        saveSettings();
+
+        // Обновляем UI если нужно
+        if (window) {
+            // Перезагружаем меню настроек
+            initPlayerSettings();
         }
     }
-
     void saveSettings() {
-        std::ofstream file("settings.txt");
-        if (file.is_open()) {
-            file << settings.playerName << std::endl;
-            file << (int)settings.playerColor.r << " " << (int)settings.playerColor.g << " "
-                << (int)settings.playerColor.b << std::endl;
-            file << settings.fieldSize << std::endl;
-
-            // Сохранение клавиш
-            for (auto key : settings.playerKeys) {
-                file << static_cast<int>(key) << std::endl;
-            }
-
-            
-            file << settings.difficulty << std::endl;
-
-            file.close();
+        std::ofstream file("config.ini");
+        if (!file.is_open()) {
+            std::cout << "Error: Could not save settings to config.ini" << std::endl;
+            return;
         }
+
+        // Заголовок с комментариями
+        file << "# Snake Game Configuration File\n";
+        file << "# Generated on: " << __DATE__ << " " << __TIME__ << "\n\n";
+
+        // Настройки игрока
+        file << "# Player Settings\n";
+        file << "playerName=" << settings.playerName << "\n";
+        file << "playerColor=" << (int)settings.playerColor.r << " "
+            << (int)settings.playerColor.g << " "
+            << (int)settings.playerColor.b << "\n";
+        file << "botColor=" << (int)settings.botColor.r << " "
+            << (int)settings.botColor.g << " "
+            << (int)settings.botColor.b << "\n";
+        file << "fieldSize=" << settings.fieldSize << "\n";
+        file << "difficulty=" << settings.difficulty << "\n\n";
+
+        // Игровой процесс
+        file << "# Gameplay Settings\n";
+        file << "snakeSpeed=" << settings.snakeSpeed << "\n";
+        file << "snakeRotationSpeed=" << settings.snakeRotationSpeed << "\n";
+        file << "initialSnakeLength=" << settings.initialSnakeLength << "\n";
+        file << "fruitSpawnRate=" << settings.fruitSpawnRate << "\n\n";
+
+        // Управление
+        file << "# Control Settings\n";
+        file << "keyAccelerate=" << static_cast<int>(settings.playerKeys[0]) << "\n";
+        file << "keyTurnLeft=" << static_cast<int>(settings.playerKeys[1]) << "\n";
+        file << "keyDecelerate=" << static_cast<int>(settings.playerKeys[2]) << "\n";
+        file << "keyTurnRight=" << static_cast<int>(settings.playerKeys[3]) << "\n\n";
+
+        // Графика
+        file << "# Graphics Settings\n";
+        file << "showGrid=" << (settings.showGrid ? "true" : "false") << "\n\n";
+
+        // Звук
+        file << "# Audio Settings\n";
+        file << "soundVolume=" << settings.soundVolume << "\n";
+        file << "musicVolume=" << settings.musicVolume << "\n";
+        file << "soundEnabled=" << (settings.soundEnabled ? "true" : "false") << "\n\n";
+
+        // Комментарий с инструкциями
+        file << "# Key codes reference:\n";
+        file << "# W=22, A=0, S=18, D=3\n";
+        file << "# Up=73, Left=71, Down=74, Right=72\n";
+        file << "# Space=57, Enter=58, Escape=36\n";
+
+        file.close();
+        std::cout << "Settings saved to config.ini" << std::endl;
     }
 
     void handleNameInput(sf::Event& event) {
@@ -1013,8 +1286,11 @@ public:
 
     void startGame(int rounds, int bots) {
         std::cout << "=== STARTING GAME ===" << std::endl;
+        std::cout << "Player name: " << settings.playerName << std::endl;
         std::cout << "Rounds: " << rounds << ", Bots: " << bots << std::endl;
         std::cout << "Difficulty: " << settings.difficulty << std::endl;
+        std::cout << "Speed: " << settings.snakeSpeed << std::endl;
+        std::cout << "Initial length: " << settings.initialSnakeLength << std::endl;
 
         gameState = PLAYING;
         gameData.totalRounds = rounds;
@@ -1032,8 +1308,8 @@ public:
         gameFruits.clear();
 
         // Создание игрока - ТОЛЬКО ГОЛОВА
-        Snake* player = new Snake(settings.playerName, settings.playerColor);
-
+        
+        Snake* player = new Snake(settings.playerName, settings.playerColor, settings, true);
         // Настройка управления
         player->moveUp = settings.playerKeys[0];    // W
         player->moveDown = settings.playerKeys[2];  // S
@@ -1055,7 +1331,7 @@ public:
 
         // Создание ботов
         for (int i = 0; i < bots; i++) {
-            Snake* bot = new Snake("Bot " + std::to_string(i + 1), settings.botColor, false);
+            Snake* bot = new Snake("Bot " + std::to_string(i + 1), settings.botColor, settings, false);
             // Боты тоже начинают с одной головы
             bot->body[0] = sf::Vector2f(200 + i * 150, 200 + i * 100);
             snakes.push_back(bot);
@@ -1072,59 +1348,40 @@ public:
         fruitSpawnClock.restart();
 
         std::cout << "Game started successfully!" << std::endl;
+
     }
 
     void spawnGameFruit() {
-        // Размер ячейки (берем у первой змейки если есть)
-        int cellSize = 20;
-        if (!snakes.empty()) {
-            cellSize = snakes[0]->cellSize;
+        if (snakes.empty()) return;
+
+        // Размер клетки берем из змейки
+        int cellSize = snakes[0]->cellSize;
+
+        // Рассчитываем доступное пространство для спавна в клетках
+        int minGridX = 50 / cellSize + 1;
+        int maxGridX = 950 / cellSize - 1;
+        int minGridY = 50 / cellSize + 1;
+        int maxGridY = 850 / cellSize - 1;
+
+        // Генерируем случайные координаты клетки
+        int gridX = minGridX + rand() % (maxGridX - minGridX + 1);
+        int gridY = minGridY + rand() % (maxGridY - minGridY + 1);
+
+        // Преобразуем координаты клетки в пиксельные координаты
+        // +1 чтобы быть внутри клетки, а не на границе
+        float x = gridX * cellSize + 1;
+        float y = gridY * cellSize + 1;
+
+        float spoilRate = settings.fruitSpoilRateMedium;
+
+        switch (settings.difficulty) {
+        case 1: spoilRate = settings.fruitSpoilRateEasy; break;
+        case 2: spoilRate = settings.fruitSpoilRateMedium; break;
+        case 3: spoilRate = settings.fruitSpoilRateHard; break;
         }
 
-        // Сетка игрового поля (исключая границы)
-        int minX = 50;
-        int maxX = 950 - cellSize;
-        int minY = 50;
-        int maxY = 850 - cellSize;
-
-        int gridWidth = (maxX - minX) / cellSize;
-        int gridHeight = (maxY - minY) / cellSize;
-
-        // Ищем свободную ячейку
-        for (int attempt = 0; attempt < 100; attempt++) {
-            int gridX = rand() % gridWidth;
-            int gridY = rand() % gridHeight;
-
-            float x = minX + gridX * cellSize;
-            float y = minY + gridY * cellSize;
-
-            // Проверяем, не занята ли ячейка змейкой
-            bool occupied = false;
-            for (auto snake : snakes) {
-                for (auto& segment : snake->body) {
-                    int segCellX = (int)(segment.x / cellSize) * cellSize;
-                    int segCellY = (int)(segment.y / cellSize) * cellSize;
-
-                    if (abs(segCellX - x) < cellSize && abs(segCellY - y) < cellSize) {
-                        occupied = true;
-                        break;
-                    }
-                }
-                if (occupied) break;
-            }
-
-            if (!occupied) {
-                float spoilRate = 1.0f;
-                switch (settings.difficulty) {
-                case 1: spoilRate = 0.5f; break;
-                case 2: spoilRate = 1.0f; break;
-                case 3: spoilRate = 2.0f; break;
-                }
-
-                gameFruits.push_back(new Fruit(sf::Vector2f(x, y), 10.0f, spoilRate));
-                return;
-            }
-        }
+        Fruit* fruit = new Fruit(sf::Vector2f(x, y), 10.0f, spoilRate);
+        gameFruits.push_back(fruit);
     }
 
     void updateGame(float deltaTime) {
@@ -1156,6 +1413,10 @@ public:
     }
 
     void checkCollisions() {
+        if (snakes.empty()) return;
+
+        int cellSize = snakes[0]->cellSize;
+
         // Проверка столкновения с фруктами
         for (size_t i = 0; i < gameFruits.size(); i++) {
             if (!gameFruits[i]->isGood) continue;
@@ -1164,16 +1425,16 @@ public:
                 if (!snake->isAlive) continue;
 
                 // Проверяем столкновение головы с фруктом
-                sf::Vector2f headPos = snake->getHeadPosition();
+                sf::Vector2f headPos = snake->body[0];
                 sf::Vector2f fruitPos = gameFruits[i]->position;
 
-                // Проверка по сетке (совпадение ячеек)
-                int headCellX = (int)(headPos.x / snake->cellSize) * snake->cellSize;
-                int headCellY = (int)(headPos.y / snake->cellSize) * snake->cellSize;
-                int fruitCellX = (int)(fruitPos.x / snake->cellSize) * snake->cellSize;
-                int fruitCellY = (int)(fruitPos.y / snake->cellSize) * snake->cellSize;
+                // Проверяем расстояние
+                float dx = headPos.x - fruitPos.x;
+                float dy = headPos.y - fruitPos.y;
+                float distance = sqrt(dx * dx + dy * dy);
 
-                if (headCellX == fruitCellX && headCellY == fruitCellY) {
+                // Если голова достаточно близко к фрукту
+                if (distance < cellSize / 2) {
                     snake->grow();
                     gameFruits[i]->isGood = false;
                     gameData.score = snake->score;
@@ -1190,44 +1451,110 @@ public:
         for (auto snake : snakes) {
             if (!snake->isAlive) continue;
 
-            sf::Vector2f head = snake->getHeadPosition();
-            if (head.x < 50 || head.x > 950 || head.y < 50 || head.y > 850) {
+            sf::Vector2f head = snake->body[0];
+
+            // Проверяем границы
+            if (head.x < 50 || head.x > 950 - snake->cellSize ||
+                head.y < 50 || head.y > 850 - snake->cellSize) {
                 snake->isAlive = false;
+                std::cout << snake->name << " died by hitting the wall!" << std::endl;
             }
         }
 
-        // Проверка столкновений с телами (только если есть тело)
+        // Проверка столкновений с телом (САМОСТОЛКНОВЕНИЕ)
         for (auto snake : snakes) {
             if (!snake->isAlive) continue;
 
-            // Проверяем столкновение головы с телом (начиная с 4 сегмента, чтобы не убивать сразу)
+            
             for (size_t i = 3; i < snake->body.size(); i++) {
-                if (snake->getHeadPosition() == snake->body[i]) {
+                // Координаты клеток
+                int headCellX = static_cast<int>(snake->body[0].x / cellSize);
+                int headCellY = static_cast<int>(snake->body[0].y / cellSize);
+                int segmentCellX = static_cast<int>(snake->body[i].x / cellSize);
+                int segmentCellY = static_cast<int>(snake->body[i].y / cellSize);
+
+                // Если голова в той же клетке, что и сегмент тела
+                if (headCellX == segmentCellX && headCellY == segmentCellY) {
                     snake->isAlive = false;
+                    std::cout << snake->name << " died by self-collision!" << std::endl;
+                    std::cout << "Head at cell: (" << headCellX << ", " << headCellY << ")" << std::endl;
+                    std::cout << "Body segment " << i << " at cell: ("
+                        << segmentCellX << ", " << segmentCellY << ")" << std::endl;
+                    std::cout << "Snake length: " << snake->body.size() << std::endl;
                     break;
                 }
             }
         }
+
+        // Проверка столкновений между змейками (если есть несколько игроков/ботов)
+        for (size_t i = 0; i < snakes.size(); i++) {
+            if (!snakes[i]->isAlive) continue;
+
+            for (size_t j = 0; j < snakes.size(); j++) {
+                if (i == j || !snakes[j]->isAlive) continue;
+
+                // Проверяем столкновение головы змейки i с телом змейки j
+                int headCellX_i = static_cast<int>(snakes[i]->body[0].x / cellSize);
+                int headCellY_i = static_cast<int>(snakes[i]->body[0].y / cellSize);
+
+                for (size_t k = 0; k < snakes[j]->body.size(); k++) {
+                    int segmentCellX = static_cast<int>(snakes[j]->body[k].x / cellSize);
+                    int segmentCellY = static_cast<int>(snakes[j]->body[k].y / cellSize);
+
+                    if (headCellX_i == segmentCellX && headCellY_i == segmentCellY) {
+                        snakes[i]->isAlive = false;
+                        std::cout << snakes[i]->name << " died by colliding with "
+                            << snakes[j]->name << "!" << std::endl;
+                        break;
+                    }
+                }
+
+                if (!snakes[i]->isAlive) break;
+            }
+        }
+
+        
     }
 
     void checkGameOver() {
         if (gameState != PLAYING) return;
 
-        
-        // Игра должна продолжаться минимум 30 секунд
-        if (gameData.gameTime > 30.0f) {
-            // Проверяем жив ли игрок
-            bool playerAlive = false;
-            for (auto snake : snakes) {
-                if (snake->isPlayer) {
-                    playerAlive = snake->isAlive;
-                    break;
+        // Проверяем, жив ли игрок
+        bool playerAlive = false;
+        Snake* playerSnake = nullptr;
+
+        for (auto snake : snakes) {
+            if (snake->isPlayer) {
+                playerAlive = snake->isAlive;
+                playerSnake = snake;
+                break;
+            }
+        }
+
+        // Если игрок мертв - показываем диалог Game Over
+        if (!playerAlive) {
+            gameState = GAME_OVER;
+
+            // Определяем причину смерти
+            std::string deathReason = "Game Over";
+            if (playerSnake) {
+                sf::Vector2f head = playerSnake->body[0];
+
+                // Проверка столкновения со стеной
+                if (head.x < 50 || head.x > 950 - playerSnake->cellSize ||
+                    head.y < 50 || head.y > 850 - playerSnake->cellSize) {
+                    deathReason = "You hit the wall!";
+                }
+                else {
+                    deathReason = "You collided with yourself!";
                 }
             }
 
-            if (!playerAlive) {
-                endGame(false);
-            }
+            // Показываем диалог Game Over
+            gameOverDialog->show("Game Over", sf::Color::Red,
+                gameData.score, gameData.roundWins,
+                gameData.totalRounds, deathReason);
+            return;
         }
     }
 
@@ -1288,26 +1615,61 @@ public:
 
         std::string winner;
         sf::Color winnerColor;
+        std::string deathReason = "";
 
+        // Определяем победителя
         if (playerWon) {
             winner = gameData.playerName;
             winnerColor = gameData.playerColor;
+            deathReason = "You won!";
         }
         else {
-            // Ищем живого бота
+            // Ищем живого бота или определяем причину смерти игрока
+            bool foundAliveBot = false;
             for (auto snake : snakes) {
                 if (!snake->isPlayer && snake->isAlive) {
                     winner = snake->name;
                     winnerColor = snake->color;
+                    deathReason = "Defeated by " + snake->name;
+                    foundAliveBot = true;
                     break;
                 }
             }
-            if (winner.empty()) winner = "No one";
+
+            if (!foundAliveBot) {
+                // Определяем причину смерти игрока
+                Snake* playerSnake = nullptr;
+                for (auto snake : snakes) {
+                    if (snake->isPlayer) {
+                        playerSnake = snake;
+                        break;
+                    }
+                }
+
+                if (playerSnake) {
+                    // Проверяем, умер ли игрок от столкновения со стеной или с собой
+                    sf::Vector2f head = playerSnake->body[0];
+
+                    // Проверка столкновения со стеной
+                    if (head.x < 50 || head.x > 950 - playerSnake->cellSize ||
+                        head.y < 50 || head.y > 850 - playerSnake->cellSize) {
+                        deathReason = "You hit the wall!";
+                    }
+                    // Проверка столкновения с собой
+                    else {
+                        deathReason = "You collided with yourself!";
+                    }
+                }
+
+                winner = "Game Over";
+                winnerColor = sf::Color::Red;
+            }
         }
 
+        // Показываем диалог окончания игры с причиной
         gameOverDialog->show(winner, winnerColor,
             gameData.score, gameData.roundWins,
-            gameData.totalRounds);
+            gameData.totalRounds, deathReason);
     }
 
     void handleGameInput() {
@@ -1323,18 +1685,22 @@ public:
 
         if (!playerSnake) return;
 
-        // Управление движением по сетке
-        if (sf::Keyboard::isKeyPressed(playerSnake->moveUp)) {
-            playerSnake->setDirection(sf::Vector2f(0, -1)); // Вверх
+        // Можно менять направление в любой момент, но без разворота на 180°
+        if (sf::Keyboard::isKeyPressed(playerSnake->moveUp) &&
+            !(playerSnake->direction.x == 0 && playerSnake->direction.y == 1)) {
+            playerSnake->nextDirection = sf::Vector2f(0, -1);
         }
-        else if (sf::Keyboard::isKeyPressed(playerSnake->moveDown)) {
-            playerSnake->setDirection(sf::Vector2f(0, 1)); // Вниз
+        else if (sf::Keyboard::isKeyPressed(playerSnake->moveDown) &&
+            !(playerSnake->direction.x == 0 && playerSnake->direction.y == -1)) {
+            playerSnake->nextDirection = sf::Vector2f(0, 1);
         }
-        else if (sf::Keyboard::isKeyPressed(playerSnake->moveLeft)) {
-            playerSnake->setDirection(sf::Vector2f(-1, 0)); // Влево
+        else if (sf::Keyboard::isKeyPressed(playerSnake->moveLeft) &&
+            !(playerSnake->direction.x == 1 && playerSnake->direction.y == 0)) {
+            playerSnake->nextDirection = sf::Vector2f(-1, 0);
         }
-        else if (sf::Keyboard::isKeyPressed(playerSnake->moveRight)) {
-            playerSnake->setDirection(sf::Vector2f(1, 0)); // Вправо
+        else if (sf::Keyboard::isKeyPressed(playerSnake->moveRight) &&
+            !(playerSnake->direction.x == -1 && playerSnake->direction.y == 0)) {
+            playerSnake->nextDirection = sf::Vector2f(1, 0);
         }
     }
 
@@ -1356,24 +1722,23 @@ public:
         field.setOutlineColor(sf::Color::White);
         window->draw(field);
 
-        // Рисуем сетку (опционально)
-        if (snakes.size() > 0) {
+        // Рисуем сетку ТОЛЬКО если включено в настройках
+        if (settings.showGrid && snakes.size() > 0) {
             int cellSize = snakes[0]->cellSize;
 
-            // Горизонтальные линии
+            // Рисуем границы клеток - ТОНКИМИ светло-серыми линиями
             for (int y = 50; y <= 850; y += cellSize) {
-                sf::RectangleShape line(sf::Vector2f(900, 1));
-                line.setPosition(50, y);
-                line.setFillColor(sf::Color(30, 50, 30, 50));
-                window->draw(line);
+                sf::RectangleShape hLine(sf::Vector2f(900, 1));
+                hLine.setPosition(50, y);
+                hLine.setFillColor(sf::Color(150, 150, 150, 80)); // Светло-серый, полупрозрачный
+                window->draw(hLine);
             }
 
-            // Вертикальные линии
             for (int x = 50; x <= 950; x += cellSize) {
-                sf::RectangleShape line(sf::Vector2f(1, 800));
-                line.setPosition(x, 50);
-                line.setFillColor(sf::Color(30, 50, 30, 50));
-                window->draw(line);
+                sf::RectangleShape vLine(sf::Vector2f(1, 800));
+                vLine.setPosition(x, 50);
+                vLine.setFillColor(sf::Color(150, 150, 150, 80)); // Светло-серый, полупрозрачный
+                window->draw(vLine);
             }
         }
 
@@ -1456,7 +1821,7 @@ public:
         window = new sf::RenderWindow(sf::VideoMode(1000, 900), "Snake Game Menu");
         window->setFramerateLimit(60);
 
-        if (!font.loadFromFile("arial.ttf")) {
+        if (!font.loadFromFile("Ubuntu-Regular.ttf")) {
             return false;
         }
 
@@ -1533,16 +1898,22 @@ public:
                         event.mouseButton.button == sf::Mouse::Left) {
                         gameOverDialog->handleClick(mousePos, [this](std::string action) {
                             if (action == "restart") {
+                                // Начинаем игру заново с теми же параметрами
                                 startGame(gameData.totalRounds, gameData.totalBots);
+                                gameState = PLAYING;
+                                gameOverDialog->hide();
                             }
                             else if (action == "exit") {
+                                // Возвращаемся в главное меню
                                 gameState = MENU;
                                 gameOverDialog->hide();
+
                                 // Очистка игровых объектов
                                 for (auto snake : snakes) delete snake;
                                 for (auto fruit : gameFruits) delete fruit;
                                 snakes.clear();
                                 gameFruits.clear();
+                                showTitle = true;
                             }
                             });
                     }
@@ -1560,8 +1931,10 @@ public:
 
             // Обновление игры
             if (gameState == PLAYING) {
-                handleGameInput(); // Добавить этот вызов!
+                handleGameInput();
                 updateGame(deltaTime);
+                checkCollisions();
+                checkGameOver(); // Проверяем, не закончилась ли игра
             }
 
             // Отрисовка
@@ -1578,7 +1951,7 @@ public:
             if (gameState == MENU) {
                 render();
             }
-            else {
+            else if (gameState == PLAYING || gameState == PAUSED || gameState == GAME_OVER) {
                 renderGame();
 
                 if (gameState == PAUSED) {
@@ -1592,6 +1965,7 @@ public:
             window->display();
         }
     }
+
     // И добавить новый метод:
     void handlePauseDialog(std::string action) {
         if (action == "resume") {
@@ -1609,6 +1983,7 @@ public:
             for (auto fruit : gameFruits) delete fruit;
             snakes.clear();
             gameFruits.clear();
+            showTitle = true;
         }
     }
 
@@ -1620,27 +1995,33 @@ public:
         case Screen::MAIN:
             clicked = handleMouseClick(mainButtons, mousePos);
             if (clicked) {
-                std::string action = mainButtons[0]->clicked ? mainButtons[0]->action :
-                    mainButtons[1]->clicked ? mainButtons[1]->action :
-                    mainButtons[2]->clicked ? mainButtons[2]->action :
-                    mainButtons[3]->clicked ? mainButtons[3]->action : "";
+                std::string action = "";
+                for (auto& btn : mainButtons) {
+                    if (btn->clicked) {
+                        action = btn->action;
+                        break;
+                    }
+                }
 
-                if (action == "Play") {
+                if (action == "Начать") {
                     currentScreen = Screen::GAME_SETTINGS;
                     initGameSettings();
+                    showTitle = false;  // Скрываем заголовок
                 }
-                else if (action == "Settings") {
+                else if (action == "Настройки") {
                     currentScreen = Screen::PLAYER_SETTINGS;
                     initPlayerSettings();
+                    showTitle = false;  // Скрываем заголовок
                 }
-                else if (action == "Developers") {
+                else if (action == "О создателях") {
                     currentScreen = Screen::ABOUT;
                     initAbout();
+                    showTitle = false;  // Скрываем заголовок
                 }
-                else if (action == "Exit") {
+                else if (action == "Выход") {
                     currentScreen = Screen::EXIT_CONFIRM;
+                    showTitle = false;  // Скрываем заголовок
                 }
-                
             }
             break;
 
@@ -1666,37 +2047,47 @@ public:
                     // ЗАМЕНИТЬ window->close() на:
                     startGame(rounds, bots);
                 }
-                else if (action == "back") {
+                if (action == "back") {
                     currentScreen = Screen::MAIN;
                     initMainMenu();
+                    showTitle = true;  
                 }
-            }
+                else if (action == "reset_defaults") {
+                    resetToDefaultSettings();
+                    // Обновить отображаемые настройки
+                    playerSettingsButtons[8]->text.setString("Field size: " + std::to_string(settings.fieldSize));
+                }
+                break;
+             }
             
             else {
                 clicked = handleMouseClick(difficultyButtons, mousePos);
-                if (clicked) {
-                    std::string action = "";
-                    for (auto& btn : difficultyButtons) {
-                        if (btn->clicked) {
-                            action = btn->action;
-                            break;
+                if (!clicked) {
+                    clicked = handleMouseClick(difficultyButtons, mousePos);
+                    if (clicked) {
+                        std::string action = "";
+                        for (auto& btn : difficultyButtons) {
+                            if (btn->clicked) {
+                                action = btn->action;
+                                break;
+                            }
                         }
-                    }
 
-                    if (action == "diff_easy") {
-                        settings.difficulty = 1;
-                    }
-                    else if (action == "diff_medium") {
-                        settings.difficulty = 2;
-                    }
-                    else if (action == "diff_hard") {
-                        settings.difficulty = 3;
-                    }
+                        if (action == "diff_easy") {
+                            settings.difficulty = 1;
+                        }
+                        else if (action == "diff_medium") {
+                            settings.difficulty = 2;
+                        }
+                        else if (action == "diff_hard") {
+                            settings.difficulty = 3;
+                        }
 
-                    // Подсветка выбранной кнопки
-                    for (auto& btn : difficultyButtons) {
-                        btn->rect.setOutlineColor(sf::Color::Black);
-                        btn->rect.setOutlineThickness(2);
+                        // Подсветка выбранной кнопки
+                        for (auto& btn : difficultyButtons) {
+                            btn->rect.setOutlineColor(sf::Color::Black);
+                            btn->rect.setOutlineThickness(2);
+                        }
                     }
                 }
             }
@@ -1744,9 +2135,10 @@ public:
                     currentScreen = Screen::MAIN;
                     initMainMenu();
                 }
-                else if (action == "back") {
+                if (action == "back") {
                     currentScreen = Screen::MAIN;
                     initMainMenu();
+                    showTitle = true;  
                 }
             }
             break;
@@ -1756,6 +2148,7 @@ public:
             if (clicked && aboutButtons[0]->clicked) {
                 currentScreen = Screen::MAIN;
                 initMainMenu();
+                showTitle = true;  
             }
             break;
 
@@ -1773,9 +2166,10 @@ public:
                 if (action == "exit_yes") {
                     window->close();
                 }
-                else if (action == "exit_no") {
+                if (action == "exit_no") {
                     currentScreen = Screen::MAIN;
                     initMainMenu();
+                    showTitle = true;  
                 }
             }
             break;
@@ -1842,419 +2236,685 @@ public:
     }
 
     void render() {
-        sf::Text title;
-        title.setFont(font);
-        title.setCharacterSize(48);
-        title.setFillColor(sf::Color::White);
-        title.setStyle(sf::Text::Bold);
-        title.setString("Snake Game");
+        window->clear(bgColor);
 
-        // Добавляем тень к заголовку для лучшей читаемости на фоне
-        sf::Text titleShadow = title;
-        titleShadow.setFillColor(sf::Color::Black);
-        titleShadow.setPosition(352, 102);
-        window->draw(titleShadow);
-
-        title.setPosition(350, 100);
-        window->draw(title);
-
-        sf::Text info;
-        info.setFont(font);
-        info.setCharacterSize(20);
-        info.setFillColor(sf::Color::White);
-
-        switch (currentScreen) {
-        case Screen::MAIN:
-            for (auto btn : mainButtons) {
-                window->draw(btn->rect);
-                window->draw(btn->text);
-            }
-            break;
-
-        case Screen::GAME_SETTINGS: {
-            info.setString("Rounds: " + std::to_string(rounds) + " | Bots: " + std::to_string(bots));
-            info.setPosition(350, 200);
-
-            // Добавляем тень к тексту
-            sf::Text infoShadow = info;
-            infoShadow.setFillColor(sf::Color::Black);
-            infoShadow.setPosition(352, 202);
-            window->draw(infoShadow);
-            window->draw(info);
-
-            //  Отображаем выбранную сложность
-            sf::Text diffInfo;
-            diffInfo.setFont(font);
-            diffInfo.setCharacterSize(20);
-            diffInfo.setFillColor(sf::Color::White);
-            std::string diffText;
-            if (settings.difficulty == 1) diffText = "Easy (slow spoil)";
-            else if (settings.difficulty == 2) diffText = "Medium";
-            else diffText = "Hard (fast spoil)";
-            diffInfo.setString("Difficulty: " + diffText);
-            
-            diffInfo.setPosition(100, 480);
-            sf::Text diffInfoShadow = diffInfo;
-            diffInfoShadow.setFillColor(sf::Color::Black);
-            diffInfoShadow.setPosition(102, 482);
-            window->draw(diffInfoShadow);
-            window->draw(diffInfo);
-
-            // Отображаем кнопки настроек игры
-            for (auto btn : gameSettingsButtons) {
-                window->draw(btn->rect);
-                window->draw(btn->text);
-            }
-
-            
-            for (auto btn : difficultyButtons) {
-                // Подсветка выбранной сложности
-                if ((settings.difficulty == 1 && btn->action == "diff_easy") ||
-                    (settings.difficulty == 2 && btn->action == "diff_medium") ||
-                    (settings.difficulty == 3 && btn->action == "diff_hard")) {
-                    btn->rect.setOutlineColor(sf::Color::Yellow);
-                    btn->rect.setOutlineThickness(3);
-                }
-                else {
-                    btn->rect.setOutlineColor(sf::Color::Black);
-                    btn->rect.setOutlineThickness(2);
-                }
-
-                window->draw(btn->rect);
-                window->draw(btn->text);
-            }
-
-            
-            sf::Text fruitDemoText;
-            fruitDemoText.setFont(font);
-            fruitDemoText.setCharacterSize(18);
-            fruitDemoText.setFillColor(sf::Color::White);
-            fruitDemoText.setString("Fruit spoilage demo:");
-            fruitDemoText.setPosition(600, 230);
-            window->draw(fruitDemoText);
-
-            // Создаем примеры фруктов для демонстрации
-            std::vector<Fruit> demoFruits;
-            demoFruits.push_back(Fruit(sf::Vector2f(600, 270), 10.0f, 0.5f)); // Легкий
-            demoFruits.push_back(Fruit(sf::Vector2f(600, 350), 10.0f, 1.0f)); // Средний  
-            demoFruits.push_back(Fruit(sf::Vector2f(600, 430), 10.0f, 2.0f)); // Сложный
-
-            // Обновляем и отрисовываем фрукты
-            static float demoTime = 0;
-            demoTime += 0.016f;
-
-            for (size_t i = 0; i < demoFruits.size(); i++) {
-                // Устанавливаем разную степень свежести для демонстрации
-                demoFruits[i].lifetime = 10.0f - (demoTime * (i + 1) * 0.5f);
-                if (demoFruits[i].lifetime < 0) demoFruits[i].lifetime = 0;
-                demoFruits[i].updateAppearance();
-                window->draw(demoFruits[i].shape);
-
-                // Подписи под фруктами
-                sf::Text fruitLabel;
-                fruitLabel.setFont(font);
-                fruitLabel.setCharacterSize(16);
-                fruitLabel.setFillColor(sf::Color::White);
-                std::string freshness = std::to_string(static_cast<int>((demoFruits[i].lifetime / 10.0f) * 100)) + "%";
-                fruitLabel.setString("Fresh: " + freshness);
-                fruitLabel.setPosition(600, 300 + i * 80);
-                window->draw(fruitLabel);
-            }
-
-            // Сброс демо-таймера
-            if (demoTime > 20.0f) demoTime = 0;
-            break;
+        if (backgroundLoaded) {
+            window->draw(backgroundSprite);
+            sf::RectangleShape overlay;
+            overlay.setSize(sf::Vector2f(1000, 900));
+            overlay.setFillColor(sf::Color(0, 0, 0, 100));
+            window->draw(overlay);
         }
 
-        case Screen::PLAYER_SETTINGS: {
-            info.setString("Nickname: " + settings.playerName);
-            info.setPosition(100, 200);
-            sf::Text infoShadow = info;
-            infoShadow.setFillColor(sf::Color::Black);
-            infoShadow.setPosition(102, 202);
-            window->draw(infoShadow);
-            window->draw(info);
+        if (gameState == MENU) {
+            // ========== ОТРИСОВКА ЗАГОЛОВКА ТОЛЬКО НА ГЛАВНОМ ЭКРАНЕ ==========
+            if (showTitle && currentScreen == Screen::MAIN) {
+                sf::Text title;
+                title.setFont(font);
+                title.setCharacterSize(50);
+                title.setFillColor(sf::Color::White);
+                title.setStyle(sf::Text::Bold);
+                title.setString("Snake Game");
 
-            info.setString("Player Color");
-            info.setPosition(100, 220);
-            infoShadow = info;
-            infoShadow.setPosition(100, 220);
-            window->draw(infoShadow);
-            window->draw(info);
+                // Центрирование по горизонтали
+                sf::FloatRect titleBounds = title.getLocalBounds();
+                title.setOrigin(titleBounds.left + titleBounds.width / 2.0f,
+                    titleBounds.top + titleBounds.height / 2.0f);
+                title.setPosition(500, 100);  // Центр экрана
 
-            // Отображение текущих клавиш управления
-            info.setString("Current Controls: " +
-                getKeyName(settings.playerKeys[0]) + " " +
-                getKeyName(settings.playerKeys[1]) + " " +
-                getKeyName(settings.playerKeys[2]) + " " +
-                getKeyName(settings.playerKeys[3]));
-            info.setPosition(100, 430);
-            infoShadow = info;
-            infoShadow.setPosition(100, 430);
-            window->draw(infoShadow);
-            window->draw(info);
+                // Тень
+                sf::Text titleShadow = title;
+                titleShadow.setFillColor(sf::Color::Black);
+                titleShadow.setPosition(title.getPosition().x + 2, title.getPosition().y + 2);
+                window->draw(titleShadow);
+                window->draw(title);
+            }
+            // ========== КОНЕЦ ОТРИСОВКИ ЗАГОЛОВКА ==========
 
-            info.setString("Field size: " + std::to_string(settings.fieldSize));
-            info.setPosition(100, 470);
-            infoShadow = info;
-            infoShadow.setPosition(100, 470);
-            window->draw(infoShadow);
-            window->draw(info);
+            sf::Text info;
+            info.setFont(font);
+            info.setCharacterSize(20);
+            info.setFillColor(sf::Color::White);
 
-            sf::RectangleShape colorRect;
-            colorRect.setSize(sf::Vector2f(50, 30));
-            colorRect.setFillColor(settings.playerColor);
-            colorRect.setPosition(100, 280);
-            colorRect.setOutlineColor(sf::Color::Black);
-            colorRect.setOutlineThickness(2);
-            window->draw(colorRect);
+            switch (currentScreen) {
+            case Screen::MAIN:
+                for (auto btn : mainButtons) {
+                    window->draw(btn->rect);
+                    window->draw(btn->text);
+                }
+                break;
 
-            for (auto btn : playerSettingsButtons) {
-                window->draw(btn->rect);
-                window->draw(btn->text);
+            case Screen::GAME_SETTINGS: {
+                // Информация о настройках
+                info.setString("Rounds: " + std::to_string(rounds) + " | Bots: " + std::to_string(bots));
+                sf::FloatRect infoBounds = info.getLocalBounds();
+                info.setOrigin(infoBounds.left + infoBounds.width / 2.0f,
+                    infoBounds.top + infoBounds.height / 2.0f);
+                info.setPosition(500, 150);  // Сдвигаем выше, так как нет заголовка
+
+                sf::Text infoShadow = info;
+                infoShadow.setFillColor(sf::Color::Black);
+                infoShadow.setPosition(info.getPosition().x + 2, info.getPosition().y + 2);
+                window->draw(infoShadow);
+                window->draw(info);
+
+                // Отображаем выбранную сложность
+                sf::Text diffInfo;
+                diffInfo.setFont(font);
+                diffInfo.setCharacterSize(20);
+                diffInfo.setFillColor(sf::Color::White);
+                std::string diffText;
+                if (settings.difficulty == 1) diffText = "Easy (slow spoil)";
+                else if (settings.difficulty == 2) diffText = "Medium";
+                else diffText = "Hard (fast spoil)";
+                diffInfo.setString("Difficulty: " + diffText);
+
+                // Центрируем текст сложности
+                sf::FloatRect diffBounds = diffInfo.getLocalBounds();
+                diffInfo.setOrigin(diffBounds.left + diffBounds.width / 2.0f,
+                    diffBounds.top + diffBounds.height / 2.0f);
+                diffInfo.setPosition(500, 480);
+
+                sf::Text diffInfoShadow = diffInfo;
+                diffInfoShadow.setFillColor(sf::Color::Black);
+                diffInfoShadow.setPosition(diffInfo.getPosition().x + 2, diffInfo.getPosition().y + 2);
+                window->draw(diffInfoShadow);
+                window->draw(diffInfo);
+
+                // Отображаем кнопки настроек игры
+                for (auto btn : gameSettingsButtons) {
+                    window->draw(btn->rect);
+                    window->draw(btn->text);
+                }
+
+                for (auto btn : difficultyButtons) {
+                    // Подсветка выбранной сложности
+                    if ((settings.difficulty == 1 && btn->action == "diff_easy") ||
+                        (settings.difficulty == 2 && btn->action == "diff_medium") ||
+                        (settings.difficulty == 3 && btn->action == "diff_hard")) {
+                        btn->rect.setOutlineColor(sf::Color::Yellow);
+                        btn->rect.setOutlineThickness(3);
+                    }
+                    else {
+                        btn->rect.setOutlineColor(sf::Color::Black);
+                        btn->rect.setOutlineThickness(2);
+                    }
+
+                    window->draw(btn->rect);
+                    window->draw(btn->text);
+                }
+
+                sf::Text fruitDemoText;
+                fruitDemoText.setFont(font);
+                fruitDemoText.setCharacterSize(18);
+                fruitDemoText.setFillColor(sf::Color::White);
+                fruitDemoText.setString("Fruit spoilage demo:");
+
+                // Центрируем заголовок демонстрации фруктов
+                sf::FloatRect fruitDemoBounds = fruitDemoText.getLocalBounds();
+                fruitDemoText.setOrigin(fruitDemoBounds.left + fruitDemoBounds.width / 2.0f,
+                    fruitDemoBounds.top + fruitDemoBounds.height / 2.0f);
+                fruitDemoText.setPosition(500, 230);
+                window->draw(fruitDemoText);
+
+                // Создаем примеры фруктов для демонстрации
+                std::vector<Fruit> demoFruits;
+                // Располагаем фрукты тоже по центру
+                demoFruits.push_back(Fruit(sf::Vector2f(450, 270), 10.0f, 0.5f)); // Легкий
+                demoFruits.push_back(Fruit(sf::Vector2f(500, 270), 10.0f, 1.0f)); // Средний  
+                demoFruits.push_back(Fruit(sf::Vector2f(550, 270), 10.0f, 2.0f)); // Сложный
+
+                // Обновляем и отрисовываем фрукты
+                static float demoTime = 0;
+                demoTime += 0.016f;
+
+                for (size_t i = 0; i < demoFruits.size(); i++) {
+                    // Устанавливаем разную степень свежести для демонстрации
+                    demoFruits[i].lifetime = 10.0f - (demoTime * (i + 1) * 0.5f);
+                    if (demoFruits[i].lifetime < 0) demoFruits[i].lifetime = 0;
+                    demoFruits[i].updateAppearance();
+                    window->draw(demoFruits[i].shape);
+
+                    // Подписи под фруктами
+                    sf::Text fruitLabel;
+                    fruitLabel.setFont(font);
+                    fruitLabel.setCharacterSize(16);
+                    fruitLabel.setFillColor(sf::Color::White);
+                    std::string freshness = std::to_string(static_cast<int>((demoFruits[i].lifetime / 10.0f) * 100)) + "%";
+                    fruitLabel.setString("Fresh: " + freshness);
+                    fruitLabel.setPosition(450 + i * 100, 300);
+                    window->draw(fruitLabel);
+                }
+
+                // Сброс демо-таймера
+                if (demoTime > 20.0f) demoTime = 0;
+                break;
             }
 
-            if (nameInputActive) {
-                // Рисуем полупрозрачный фон
+            case Screen::PLAYER_SETTINGS: {
+                // Заголовок по центру
+                sf::Text title;
+                title.setFont(font);
+                title.setString("НАСТРОЙКИ");
+                title.setCharacterSize(42);
+                title.setFillColor(sf::Color::Yellow);
+                title.setStyle(sf::Text::Bold);
+
+                sf::FloatRect titleBounds = title.getLocalBounds();
+                title.setOrigin(titleBounds.left + titleBounds.width / 2.0f,
+                    titleBounds.top + titleBounds.height / 2.0f);
+                title.setPosition(500, 100);
+                window->draw(title);
+
+                
+
+                
+                sf::Text colorTitle;
+                colorTitle.setFont(font);
+                colorTitle.setString("Цвет игрока:");
+                colorTitle.setCharacterSize(24);
+                colorTitle.setFillColor(sf::Color(200, 200, 255));
+                colorTitle.setPosition(100, 160);
+                window->draw(colorTitle);
+
+                // Кнопки цветов в ряд (4 штуки)
+                float colorStartX = 100;
+                float colorY = 200;
+                float colorSpacing = 200;
+
+                for (int i = 0; i < 4 && i < playerSettingsButtons.size(); i++) {
+                    playerSettingsButtons[i]->rect.setPosition(colorStartX + i * colorSpacing, colorY);
+                    playerSettingsButtons[i]->rect.setSize(sf::Vector2f(180, 50));
+
+                    // Центрируем текст в кнопке
+                    sf::FloatRect textBounds = playerSettingsButtons[i]->text.getLocalBounds();
+                    playerSettingsButtons[i]->text.setOrigin(
+                        textBounds.left + textBounds.width / 2.0f,
+                        textBounds.top + textBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[i]->text.setPosition(
+                        colorStartX + i * colorSpacing + 90, // X кнопки + половина ширины
+                        colorY + 25 // Y кнопки + половина высоты
+                    );
+
+                    window->draw(playerSettingsButtons[i]->rect);
+                    window->draw(playerSettingsButtons[i]->text);
+                }
+
+                // === СЕКЦИЯ 2: Управление ===
+                sf::Text controlTitle;
+                controlTitle.setFont(font);
+                controlTitle.setString("Управление:");
+                controlTitle.setCharacterSize(24);
+                controlTitle.setFillColor(sf::Color(200, 200, 255));
+                controlTitle.setPosition(100, 280);
+                window->draw(controlTitle);
+
+                // Кнопки управления в ряд (3 штуки)
+                float controlStartX = 100;
+                float controlY = 320;
+
+                for (int i = 4; i < 7 && i < playerSettingsButtons.size(); i++) {
+                    playerSettingsButtons[i]->rect.setPosition(controlStartX + (i - 4) * 250, controlY);
+                    playerSettingsButtons[i]->rect.setSize(sf::Vector2f(230, 50));
+
+                    // Центрируем текст
+                    sf::FloatRect textBounds = playerSettingsButtons[i]->text.getLocalBounds();
+                    playerSettingsButtons[i]->text.setOrigin(
+                        textBounds.left + textBounds.width / 2.0f,
+                        textBounds.top + textBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[i]->text.setPosition(
+                        controlStartX + (i - 4) * 250 + 115,
+                        controlY + 25
+                    );
+
+                    window->draw(playerSettingsButtons[i]->rect);
+                    window->draw(playerSettingsButtons[i]->text);
+                }
+
+                // Отображение текущих клавиш
+                sf::Text currentKeysText;
+                currentKeysText.setFont(font);
+                currentKeysText.setString("Текущие: " +
+                    getKeyName(settings.playerKeys[0]) + " " +
+                    getKeyName(settings.playerKeys[1]) + " " +
+                    getKeyName(settings.playerKeys[2]) + " " +
+                    getKeyName(settings.playerKeys[3]));
+                currentKeysText.setCharacterSize(20);
+                currentKeysText.setFillColor(sf::Color(255, 255, 200));
+                currentKeysText.setPosition(100, 380);
+                window->draw(currentKeysText);
+
+                // === СЕКЦИЯ 3: Имя игрока ===
+                sf::Text nameTitle;
+                nameTitle.setFont(font);
+                nameTitle.setString("Имя игрока:");
+                nameTitle.setCharacterSize(24);
+                nameTitle.setFillColor(sf::Color(200, 200, 255));
+                nameTitle.setPosition(100, 420);
+                window->draw(nameTitle);
+
+                // Кнопка имени (индекс 7)
+                if (7 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[7]->rect.setPosition(100, 460);
+                    playerSettingsButtons[7]->rect.setSize(sf::Vector2f(400, 50));
+
+                    // Центрируем текст имени
+                    sf::FloatRect nameBounds = playerSettingsButtons[7]->text.getLocalBounds();
+                    playerSettingsButtons[7]->text.setOrigin(
+                        nameBounds.left + nameBounds.width / 2.0f,
+                        nameBounds.top + nameBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[7]->text.setPosition(300, 485);
+
+                    window->draw(playerSettingsButtons[7]->rect);
+                    window->draw(playerSettingsButtons[7]->text);
+                }
+
+                // === СЕКЦИЯ 4: Настройки игры ===
+                sf::Text gameTitle;
+                gameTitle.setFont(font);
+                gameTitle.setString("Параметры игры:");
+                gameTitle.setCharacterSize(24);
+                gameTitle.setFillColor(sf::Color(200, 200, 255));
+                gameTitle.setPosition(100, 530);
+                window->draw(gameTitle);
+
+                // Размер поля (индекс 8)
+                if (8 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[8]->rect.setPosition(100, 570);
+                    playerSettingsButtons[8]->rect.setSize(sf::Vector2f(300, 50));
+
+                    // Центрируем текст
+                    sf::FloatRect fieldBounds = playerSettingsButtons[8]->text.getLocalBounds();
+                    playerSettingsButtons[8]->text.setOrigin(
+                        fieldBounds.left + fieldBounds.width / 2.0f,
+                        fieldBounds.top + fieldBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[8]->text.setPosition(250, 595);
+
+                    window->draw(playerSettingsButtons[8]->rect);
+                    window->draw(playerSettingsButtons[8]->text);
+                }
+
+                // Сложность (индекс 9)
+                if (9 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[9]->rect.setPosition(450, 570);
+                    playerSettingsButtons[9]->rect.setSize(sf::Vector2f(300, 50));
+
+                    // Центрируем текст
+                    sf::FloatRect diffBounds = playerSettingsButtons[9]->text.getLocalBounds();
+                    playerSettingsButtons[9]->text.setOrigin(
+                        diffBounds.left + diffBounds.width / 2.0f,
+                        diffBounds.top + diffBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[9]->text.setPosition(600, 595);
+
+                    window->draw(playerSettingsButtons[9]->rect);
+                    window->draw(playerSettingsButtons[9]->text);
+                }
+
+               
+                float actionY = 650;
+                float actionSpacing = 200;
+
+                // Сохранить (индекс 10)
+                if (10 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[10]->rect.setPosition(200, actionY);
+                    playerSettingsButtons[10]->rect.setSize(sf::Vector2f(200, 60));
+
+                    // Центрируем текст
+                    sf::FloatRect saveBounds = playerSettingsButtons[10]->text.getLocalBounds();
+                    playerSettingsButtons[10]->text.setOrigin(
+                        saveBounds.left + saveBounds.width / 2.0f,
+                        saveBounds.top + saveBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[10]->text.setPosition(300, actionY + 30);
+
+                    window->draw(playerSettingsButtons[10]->rect);
+                    window->draw(playerSettingsButtons[10]->text);
+                }
+
+                // Сбросить (индекс 11)
+                if (11 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[11]->rect.setPosition(400, actionY);
+                    playerSettingsButtons[11]->rect.setSize(sf::Vector2f(200, 60));
+
+                    // Центрируем текст
+                    sf::FloatRect resetBounds = playerSettingsButtons[11]->text.getLocalBounds();
+                    playerSettingsButtons[11]->text.setOrigin(
+                        resetBounds.left + resetBounds.width / 2.0f,
+                        resetBounds.top + resetBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[11]->text.setPosition(500, actionY + 30);
+
+                    window->draw(playerSettingsButtons[11]->rect);
+                    window->draw(playerSettingsButtons[11]->text);
+                }
+
+                // Назад (индекс 12)
+                if (12 < playerSettingsButtons.size()) {
+                    playerSettingsButtons[12]->rect.setPosition(600, actionY);
+                    playerSettingsButtons[12]->rect.setSize(sf::Vector2f(200, 60));
+
+                    // Центрируем текст
+                    sf::FloatRect backBounds = playerSettingsButtons[12]->text.getLocalBounds();
+                    playerSettingsButtons[12]->text.setOrigin(
+                        backBounds.left + backBounds.width / 2.0f,
+                        backBounds.top + backBounds.height / 2.0f
+                    );
+                    playerSettingsButtons[12]->text.setPosition(700, actionY + 30);
+
+                    window->draw(playerSettingsButtons[12]->rect);
+                    window->draw(playerSettingsButtons[12]->text);
+                }
+
+                // Диалог ввода имени (если активен)
+                if (nameInputActive) {
+                    // Простой диалог поверх всего
+                    sf::RectangleShape overlay(sf::Vector2f(1000, 900));
+                    overlay.setFillColor(sf::Color(0, 0, 0, 200));
+                    window->draw(overlay);
+
+                    sf::RectangleShape dialog(sf::Vector2f(400, 200));
+                    dialog.setPosition(300, 350);
+                    dialog.setFillColor(sf::Color(50, 50, 70));
+                    dialog.setOutlineThickness(2);
+                    dialog.setOutlineColor(sf::Color::White);
+                    window->draw(dialog);
+
+                    sf::Text prompt;
+                    prompt.setFont(font);
+                    prompt.setString("Введите имя:");
+                    prompt.setCharacterSize(24);
+                    prompt.setFillColor(sf::Color::White);
+                    prompt.setPosition(320, 370);
+                    window->draw(prompt);
+
+                    sf::Text inputText;
+                    inputText.setFont(font);
+                    inputText.setString(nameInputText + "_");
+                    inputText.setCharacterSize(24);
+                    inputText.setFillColor(sf::Color::Yellow);
+                    inputText.setPosition(320, 420);
+                    window->draw(inputText);
+                }
+
+                break;
+            }
+
+            case Screen::ABOUT: {
+                // Полупрозрачный фон
                 sf::RectangleShape overlay;
-                overlay.setSize(sf::Vector2f(1000, 900));
-                overlay.setFillColor(sf::Color(0, 0, 0, 200));
+                overlay.setSize(sf::Vector2f(400, 320));
+                overlay.setPosition(300, 160);
+                overlay.setFillColor(sf::Color(30, 30, 50, 180));
+                overlay.setOutlineThickness(2);
+                overlay.setOutlineColor(sf::Color::White);
                 window->draw(overlay);
 
-                // Рисуем диалоговое окно
+                // Заголовок
+                sf::Text title;
+                title.setFont(font);
+                title.setString("О создателях");
+                title.setCharacterSize(42);
+                title.setFillColor(sf::Color::Yellow);
+                title.setStyle(sf::Text::Bold);
+
+                // Центрируем заголовок
+                sf::FloatRect titleRect = title.getLocalBounds();
+                title.setOrigin(titleRect.left + titleRect.width / 2.0f,
+                    titleRect.top + titleRect.height / 2.0f);
+                title.setPosition(500, 200);
+
+                // Тень заголовка
+                sf::Text titleShadow = title;
+                titleShadow.setFillColor(sf::Color::Black);
+                titleShadow.setPosition(503, 203);
+                window->draw(titleShadow);
+                window->draw(title);
+
+                // Список создателей
+                sf::Text creators;
+                creators.setFont(font);
+                creators.setString("Баринов Вадим\nГололобов Егор\nЕгорчик");
+                creators.setCharacterSize(36);
+                creators.setFillColor(sf::Color::White);
+                creators.setLineSpacing(1.5f);
+
+                // Центрируем список
+                sf::FloatRect creatorsRect = creators.getLocalBounds();
+                creators.setOrigin(creatorsRect.left + creatorsRect.width / 2.0f,
+                    creatorsRect.top + creatorsRect.height / 2.0f);
+                creators.setPosition(500, 350);
+
+                // Тень списка
+                sf::Text creatorsShadow = creators;
+                creatorsShadow.setFillColor(sf::Color::Black);
+                creatorsShadow.setPosition(502, 352);
+                window->draw(creatorsShadow);
+                window->draw(creators);
+
+                // Кнопка "Назад"
+                for (auto btn : aboutButtons) {
+                    window->draw(btn->rect);
+                    window->draw(btn->text);
+                }
+                break;
+            }
+
+            case Screen::EXIT_CONFIRM: {
+                // Полупрозрачный темный фон
+                sf::RectangleShape overlay;
+                overlay.setSize(sf::Vector2f(1000, 900));
+                overlay.setFillColor(sf::Color(0, 0, 0, 180));
+                window->draw(overlay);
+
+                // Диалоговое окно
                 sf::RectangleShape dialog;
-                dialog.setSize(sf::Vector2f(600, 200));
-                dialog.setPosition(200, 300);
-                dialog.setFillColor(sf::Color(50, 50, 80, 230));
-                dialog.setOutlineColor(sf::Color::White);
-                dialog.setOutlineThickness(2);
+                dialog.setSize(sf::Vector2f(500, 200));
+                dialog.setPosition(250, 300);
+                dialog.setFillColor(sf::Color(40, 40, 60, 230));
+                dialog.setOutlineColor(sf::Color(150, 150, 200));
+                dialog.setOutlineThickness(3);
                 window->draw(dialog);
 
-                // Текст инструкции
-                sf::Text prompt;
-                prompt.setFont(font);
-                prompt.setString("Enter player name:");
-                prompt.setCharacterSize(28);
-                prompt.setFillColor(sf::Color::White);
-                prompt.setPosition(250, 320);
-                window->draw(prompt);
+                // Вопрос по центру
+                sf::Text question;
+                question.setFont(font);
+                question.setString("Хотите выйти из игры?");
+                question.setCharacterSize(34);
+                question.setFillColor(sf::Color::White);
+                question.setStyle(sf::Text::Bold);
 
-                // Поле ввода
-                sf::RectangleShape inputBox;
-                inputBox.setSize(sf::Vector2f(500, 40));
-                inputBox.setPosition(250, 380);
-                inputBox.setFillColor(sf::Color(30, 30, 30, 230));
-                inputBox.setOutlineColor(sf::Color::White);
-                inputBox.setOutlineThickness(1);
-                window->draw(inputBox);
+                // Центрируем текст по горизонтали
+                sf::FloatRect textBounds = question.getLocalBounds();
+                question.setOrigin(textBounds.left + textBounds.width / 2.0f,
+                    textBounds.top + textBounds.height / 2.0f);
+                question.setPosition(500, 340);
 
-                // Введенный текст
-                sf::Text inputTextDisplay;
-                inputTextDisplay.setFont(font);
-                inputTextDisplay.setString(nameInputText + "_"); // Курсор в виде подчеркивания
-                inputTextDisplay.setCharacterSize(24);
-                inputTextDisplay.setFillColor(sf::Color::White);
-                inputTextDisplay.setPosition(260, 385);
-                window->draw(inputTextDisplay);
+                // Тень текста для лучшей читаемости
+                sf::Text questionShadow = question;
+                questionShadow.setFillColor(sf::Color(0, 0, 0, 180));
+                questionShadow.setPosition(502, 342);
+                window->draw(questionShadow);
+                window->draw(question);
+
+                // Кнопки
+                float buttonSpacing = 30.0f;
+
+                // Кнопка "Да" - красная
+                exitConfirmButtons[0]->rect.setSize(sf::Vector2f(150, 50));
+                exitConfirmButtons[0]->rect.setPosition(300, 400);
+                exitConfirmButtons[0]->rect.setFillColor(sf::Color(180, 60, 60, 220));
+                exitConfirmButtons[0]->rect.setOutlineThickness(2);
+                exitConfirmButtons[0]->rect.setOutlineColor(sf::Color(220, 100, 100));
+
+                exitConfirmButtons[0]->text.setString("Да");
+                exitConfirmButtons[0]->text.setCharacterSize(26);
+                exitConfirmButtons[0]->text.setFillColor(sf::Color::White);
+
+                // Центрируем текст в кнопке
+                sf::FloatRect yesBounds = exitConfirmButtons[0]->text.getLocalBounds();
+                exitConfirmButtons[0]->text.setOrigin(
+                    yesBounds.left + yesBounds.width / 2.0f,
+                    yesBounds.top + yesBounds.height / 2.0f
+                );
+                exitConfirmButtons[0]->text.setPosition(
+                    300 + 150 / 2.0f,
+                    400 + 50 / 2.0f
+                );
+
+                // Кнопка "Нет" - зеленая
+                exitConfirmButtons[1]->rect.setSize(sf::Vector2f(150, 50));
+                exitConfirmButtons[1]->rect.setPosition(550, 400);
+                exitConfirmButtons[1]->rect.setFillColor(sf::Color(60, 180, 60, 220));
+                exitConfirmButtons[1]->rect.setOutlineThickness(2);
+                exitConfirmButtons[1]->rect.setOutlineColor(sf::Color(100, 220, 100));
+
+                exitConfirmButtons[1]->text.setString("Нет");
+                exitConfirmButtons[1]->text.setCharacterSize(26);
+                exitConfirmButtons[1]->text.setFillColor(sf::Color::White);
+
+                // Центрируем текст в кнопке
+                sf::FloatRect noBounds = exitConfirmButtons[1]->text.getLocalBounds();
+                exitConfirmButtons[1]->text.setOrigin(
+                    noBounds.left + noBounds.width / 2.0f,
+                    noBounds.top + noBounds.height / 2.0f
+                );
+                exitConfirmButtons[1]->text.setPosition(
+                    550 + 150 / 2.0f,
+                    400 + 50 / 2.0f
+                );
+
+                // Рисуем кнопки
+                for (auto btn : exitConfirmButtons) {
+                    window->draw(btn->rect);
+                    window->draw(btn->text);
+                }
+                break;
+            }
+
+            case Screen::EDIT_KEYS: {
+                // Заголовок
+                sf::Text editTitle;
+                editTitle.setFont(font);
+                editTitle.setString("Edit Controls");
+                editTitle.setCharacterSize(36);
+                editTitle.setFillColor(sf::Color::White);
+                editTitle.setPosition(400, 150);
+
+                // Тень для заголовка
+                sf::Text editTitleShadow = editTitle;
+                editTitleShadow.setFillColor(sf::Color::Black);
+                editTitleShadow.setPosition(402, 152);
+                window->draw(editTitleShadow);
+                window->draw(editTitle);
 
                 // Инструкция
                 sf::Text instruction;
                 instruction.setFont(font);
-                instruction.setString("Press Enter to confirm, Escape to cancel");
-                instruction.setCharacterSize(18);
-                instruction.setFillColor(sf::Color(200, 200, 200));
-                instruction.setPosition(250, 440);
+                instruction.setCharacterSize(24);
+                instruction.setFillColor(sf::Color::White);
+
+                if (keyInputActive) {
+                    
+                    instruction.setPosition(300, 250);
+
+                    // Подсветка текущей клавиши
+                    sf::RectangleShape highlight;
+                    highlight.setSize(sf::Vector2f(600, 60));
+                    highlight.setPosition(200, 300 + currentKeyIndex * 70);
+                    highlight.setFillColor(sf::Color(100, 100, 150, 150));
+                    highlight.setOutlineColor(sf::Color::Yellow);
+                    highlight.setOutlineThickness(2);
+                    window->draw(highlight);
+                }
+                
+
+                // Тень для инструкции
+                sf::Text instructionShadow = instruction;
+                instructionShadow.setFillColor(sf::Color::Black);
+                instructionShadow.setPosition(302, 222);
+                window->draw(instructionShadow);
                 window->draw(instruction);
-            }
-            break;
-        }
 
-        case Screen::ABOUT: {
-            sf::Text creators;
-            creators.setFont(font);
-            creators.setString("Creators:\nIvan Ivanov\nBalbes\nShmakov");
-            creators.setCharacterSize(32);
-            creators.setPosition(300, 200);
-            creators.setFillColor(sf::Color::White);
-
-            // Тень для текста
-            sf::Text creatorsShadow = creators;
-            creatorsShadow.setFillColor(sf::Color::Black);
-            creatorsShadow.setPosition(302, 202);
-            window->draw(creatorsShadow);
-            window->draw(creators);
-
-            for (auto btn : aboutButtons) {
-                window->draw(btn->rect);
-                window->draw(btn->text);
-            }
-            break;
-        }
-
-        case Screen::EXIT_CONFIRM: {
-            // Рисуем полупрозрачный фон
-            sf::RectangleShape overlay;
-            overlay.setSize(sf::Vector2f(1000, 900));
-            overlay.setFillColor(sf::Color(0, 0, 0, 200));
-            window->draw(overlay);
-
-            // Рисуем диалоговое окно
-            sf::RectangleShape dialog;
-            dialog.setSize(sf::Vector2f(500, 250));
-            dialog.setPosition(250, 300);
-            dialog.setFillColor(sf::Color(50, 50, 80, 230));
-            dialog.setOutlineColor(sf::Color::White);
-            dialog.setOutlineThickness(2);
-            window->draw(dialog);
-
-            // Текст вопроса
-            sf::Text question;
-            question.setFont(font);
-            question.setString("Are you sure you want to exit?");
-            question.setCharacterSize(32);
-            question.setFillColor(sf::Color::White);
-            question.setPosition(270, 320);
-            window->draw(question);
-
-            // Кнопки Yes/No
-            for (auto btn : exitConfirmButtons) {
-                window->draw(btn->rect);
-                window->draw(btn->text);
-            }
-
-            // Дополнительная инструкция
-            sf::Text instruction;
-            instruction.setFont(font);
-            instruction.setString("Click Yes to exit, No to return to main menu");
-            instruction.setCharacterSize(18);
-            instruction.setFillColor(sf::Color(200, 200, 200));
-            instruction.setPosition(280, 480);
-            window->draw(instruction);
-            break;
-        }
-
-        case Screen::EDIT_KEYS: {
-            // Заголовок
-            sf::Text editTitle;
-            editTitle.setFont(font);
-            editTitle.setString("Edit Controls");
-            editTitle.setCharacterSize(36);
-            editTitle.setFillColor(sf::Color::White);
-            editTitle.setPosition(400, 150);
-
-            // Тень для заголовка
-            sf::Text editTitleShadow = editTitle;
-            editTitleShadow.setFillColor(sf::Color::Black);
-            editTitleShadow.setPosition(402, 152);
-            window->draw(editTitleShadow);
-            window->draw(editTitle);
-
-            // Инструкция
-            sf::Text instruction;
-            instruction.setFont(font);
-            instruction.setCharacterSize(24);
-            instruction.setFillColor(sf::Color::White);
-
-            if (keyInputActive) {
-                instruction.setString("Press key for: " + keyNames[currentKeyIndex] +
-                    "\n(Press Escape to cancel)");
-                instruction.setPosition(300, 250);
-
-                // Подсветка текущей клавиши
-                sf::RectangleShape highlight;
-                highlight.setSize(sf::Vector2f(600, 60));
-                highlight.setPosition(200, 300 + currentKeyIndex * 70);
-                highlight.setFillColor(sf::Color(100, 100, 150, 150));
-                highlight.setOutlineColor(sf::Color::Yellow);
-                highlight.setOutlineThickness(2);
-                window->draw(highlight);
-            }
-            else {
-                instruction.setString("Click on a direction to change its key\nor press any key to start editing");
-                instruction.setPosition(300, 220);
-            }
-
-            // Тень для инструкции
-            sf::Text instructionShadow = instruction;
-            instructionShadow.setFillColor(sf::Color::Black);
-            instructionShadow.setPosition(302, 222);
-            window->draw(instructionShadow);
-            window->draw(instruction);
-
-            // Отображение текущих клавиш
-            for (int i = 0; i < 4; i++) {
-                sf::RectangleShape keyBox;
-                keyBox.setSize(sf::Vector2f(600, 60));
-                keyBox.setPosition(200, 300 + i * 70);
-
-                if (i == currentKeyIndex && keyInputActive) {
-                    keyBox.setFillColor(sf::Color(100, 150, 100, 180));
-                }
-                else {
-                    keyBox.setFillColor(sf::Color(70, 70, 100, 180));
-                }
-
-                keyBox.setOutlineColor(sf::Color::White);
-                keyBox.setOutlineThickness(1);
-                window->draw(keyBox);
-
-                // Название направления
-                sf::Text dirText;
-                dirText.setFont(font);
-                dirText.setString(keyNames[i] + ":");
-                dirText.setCharacterSize(24);
-                dirText.setFillColor(sf::Color::White);
-                dirText.setPosition(220, 315 + i * 70);
-                window->draw(dirText);
-
-                // Текущая клавиша
-                sf::Text keyText;
-                keyText.setFont(font);
-                keyText.setString(getKeyName(settings.playerKeys[i]));
-                keyText.setCharacterSize(24);
-                keyText.setFillColor(sf::Color::Yellow);
-                keyText.setPosition(350, 315 + i * 70);
-                window->draw(keyText);
-
-                // Кнопка для изменения этой клавиши
-                sf::Text changeText;
-                changeText.setFont(font);
-                changeText.setString("[Click to change]");
-                changeText.setCharacterSize(20);
-                changeText.setFillColor(sf::Color(150, 200, 255));
-                changeText.setPosition(600, 315 + i * 70);
-                window->draw(changeText);
-            }
-
-            // Кнопки внизу
-            for (auto btn : editKeysButtons) {
-                window->draw(btn->rect);
-                window->draw(btn->text);
-            }
-
-            // Обработка кликов по областям клавиш (вне кнопок)
-            if (!keyInputActive) {
-                sf::Vector2f mousePos = window->mapPixelToCoords(sf::Mouse::getPosition(*window));
+                // Отображение текущих клавиш
                 for (int i = 0; i < 4; i++) {
-                    sf::FloatRect keyRect(200, 300 + i * 70, 600, 60);
-                    if (keyRect.contains(mousePos)) {
-                        sf::RectangleShape hover;
-                        hover.setSize(sf::Vector2f(600, 60));
-                        hover.setPosition(200, 300 + i * 70);
-                        hover.setFillColor(sf::Color(255, 255, 255, 50));
-                        window->draw(hover);
+                    sf::RectangleShape keyBox;
+                    keyBox.setSize(sf::Vector2f(600, 60));
+                    keyBox.setPosition(200, 300 + i * 70);
+
+                    if (i == currentKeyIndex && keyInputActive) {
+                        keyBox.setFillColor(sf::Color(100, 150, 100, 180));
+                    }
+                    else {
+                        keyBox.setFillColor(sf::Color(70, 70, 100, 180));
+                    }
+
+                    keyBox.setOutlineColor(sf::Color::White);
+                    keyBox.setOutlineThickness(1);
+                    window->draw(keyBox);
+
+                    // Название направления
+                    sf::Text dirText;
+                    dirText.setFont(font);
+                    dirText.setString(keyNames[i] + ":");
+                    dirText.setCharacterSize(24);
+                    dirText.setFillColor(sf::Color::White);
+                    dirText.setPosition(220, 315 + i * 70);
+                    window->draw(dirText);
+
+                    // Текущая клавиша
+                    sf::Text keyText;
+                    keyText.setFont(font);
+                    keyText.setString(getKeyName(settings.playerKeys[i]));
+                    keyText.setCharacterSize(24);
+                    keyText.setFillColor(sf::Color::Yellow);
+                    keyText.setPosition(350, 315 + i * 70);
+                    window->draw(keyText);
+
+                    // Кнопка для изменения этой клавиши
+                    sf::Text changeText;
+                    changeText.setFont(font);
+                    changeText.setString("[Click to change]");
+                    changeText.setCharacterSize(20);
+                    changeText.setFillColor(sf::Color(150, 200, 255));
+                    changeText.setPosition(600, 315 + i * 70);
+                    window->draw(changeText);
+                }
+
+                // Кнопки внизу
+                for (auto btn : editKeysButtons) {
+                    window->draw(btn->rect);
+                    window->draw(btn->text);
+                }
+
+                // Обработка кликов по областям клавиш (вне кнопок)
+                if (!keyInputActive) {
+                    sf::Vector2f mousePos = window->mapPixelToCoords(sf::Mouse::getPosition(*window));
+                    for (int i = 0; i < 4; i++) {
+                        sf::FloatRect keyRect(200, 300 + i * 70, 600, 60);
+                        if (keyRect.contains(mousePos)) {
+                            sf::RectangleShape hover;
+                            hover.setSize(sf::Vector2f(600, 60));
+                            hover.setPosition(200, 300 + i * 70);
+                            hover.setFillColor(sf::Color(255, 255, 255, 50));
+                            window->draw(hover);
+                        }
                     }
                 }
-            }
 
-            break;
-        }
+                break;
+            }
+            }
         }
     }
 };
-
 int main() {
-    setlocale(LC_ALL, "Russian");
+    setlocale(LC_ALL, "");
+    std::locale::global(std::locale(""));
     srand(time(0)); 
 
     GameMenu menu;
